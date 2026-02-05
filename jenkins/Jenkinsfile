@@ -1,0 +1,86 @@
+pipeline {
+    agent any
+
+    environment {
+        COMPOSE_FILE = "docker-compose.yml"
+        TERRAFORM_IMAGE = "hashicorp/terraform:1.6"
+    }
+
+    stages {
+
+        stage("Checkout Code") {
+            steps {
+                git branch: 'main',
+                    url: 'https://github.com/your-username/car-booking-pipeline.git'
+            }
+        }
+
+        stage("Terraform Init & Apply (Dockerized)") {
+            steps {
+                sh """
+                docker run --rm \
+                  -v \$(pwd)/terraform:/infra \
+                  -v /var/run/docker.sock:/var/run/docker.sock \
+                  ${TERRAFORM_IMAGE} \
+                  -chdir=/infra init
+
+                docker run --rm \
+                  -v \$(pwd)/terraform:/infra \
+                  -v /var/run/docker.sock:/var/run/docker.sock \
+                  ${TERRAFORM_IMAGE} \
+                  -chdir=/infra apply -auto-approve
+                """
+            }
+        }
+
+        stage("Start Containers") {
+            steps {
+                sh "docker-compose up -d"
+            }
+        }
+
+        stage("Kafka Producer") {
+            steps {
+                sh "docker exec car-booking-pipeline-kafka-1 python /kafka/producer.py"
+            }
+        }
+
+        stage("Spark Streaming Ingest") {
+            steps {
+                sh "docker exec spark spark-submit /opt/spark-apps/ingest_stream.py"
+            }
+        }
+
+        stage("Transform & Merge") {
+            steps {
+                sh """
+                docker exec spark spark-submit /opt/spark-apps/transform_booking.py
+                docker exec spark spark-submit /opt/spark-apps/transform_customer.py
+                docker exec spark spark-submit /opt/spark-apps/merge_customer_booking.py
+                docker exec spark spark-submit /opt/spark-apps/write_to_postgres.py
+                """
+            }
+        }
+
+        stage("Data Quality - Great Expectations (Dockerized)") {
+            steps {
+                sh "docker-compose run --rm great_expectations"
+            }
+        }
+
+        stage("Load MySQL (Final)") {
+            steps {
+                sh "docker exec spark spark-submit /opt/spark-apps/write_to_mysql.py"
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "✅ PIPELINE COMPLETED SUCCESSFULLY"
+        }
+        failure {
+            echo "❌ PIPELINE FAILED – CHECK LOGS (TERRAFORM / SPARK / GE)"
+        }
+    }
+}

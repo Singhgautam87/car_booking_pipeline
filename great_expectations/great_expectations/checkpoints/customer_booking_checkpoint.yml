@@ -1,0 +1,11 @@
+name: customer_booking_checkpoint
+config_version: 1.0
+
+class_name: SimpleCheckpoint
+
+validations:
+  - batch_request:
+      datasource_name: postgres_ds
+      data_connector_name: runtime_connector
+      data_asset_name: booking.customer_booking
+    expectation_suite_name: customer_booking_suite

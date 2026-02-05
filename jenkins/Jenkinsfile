@@ -6,15 +6,6 @@ pipeline {
         TERRAFORM_IMAGE = "hashicorp/terraform:1.6"
     }
 
-    stages {
-
-        stage("Checkout Code") {
-            steps {
-                git branch: 'main',
-                    url: 'https://github.com/Singhgautam87/car-booking-pipeline.git'
-            }
-        }
-
         stage("Terraform Init & Apply (Dockerized)") {
             steps {
                 sh """

@@ -93,10 +93,16 @@ services:
   great_expectations:
     build: ./great_expectations
     container_name: great_expectations
+    restart: unless-stopped 
     volumes:
       - ./great_expectations:/ge
     depends_on:
       - postgres
+    healthcheck:  
+      test: ["CMD", "python", "-c", "import great_expectations"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
 
 

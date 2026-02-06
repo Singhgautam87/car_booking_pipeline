@@ -13,11 +13,31 @@ pipeline {
             }
         }
         
-        stage("Start Containers") {
+        stage('Start Containers') {
             steps {
-                sh "docker-compose up -d"
+                sh '''
+                    echo "🔍 Checking container status..."
+            
+                    # Great Expectations check karo
+                    if docker ps --format '{{.Names}}' | grep -q '^great_expectations$'; then
+                        echo "✅ Great Expectations container already running - reusing it"
+                    else
+                        echo "🚀 Starting Great Expectations container..."
+                        docker-compose up -d great_expectations
+                        sleep 5
+                    fi
+            
+                    # Baaki containers start karo (no recreate)
+                    echo "🚀 Starting other containers..."
+                    docker-compose up -d --no-recreate
+            
+                    sleep 10
+            
+                    echo "📋 Container Status:"
+                    docker-compose ps
+                '''
             }
-        }
+      }
 
         stage("Kafka Producer") {
             steps {
@@ -42,12 +62,23 @@ pipeline {
             }
         }
 
-        stage("Data Quality - Great Expectations") {
+        stage('Data Quality - Great Expectations') {
             steps {
-                sh "docker-compose run --rm great_expectations"
+                sh '''
+                    echo "📊 Running Great Expectations validations..."
+            
+                    # Existing container mein command run karo
+                    docker exec great_expectations python /ge/run_checkpoint.py
+            
+                    if [ $? -eq 0 ]; then
+                        echo "✅ Data quality checks PASSED"
+                    else
+                        echo "❌ Data quality checks FAILED"
+                        exit 1
+                    fi
+                '''
             }
         }
-
         stage("Load MySQL (Final)") {
             steps {
                 sh "docker exec spark spark-submit /opt/spark-apps/write_to_mysql.py"

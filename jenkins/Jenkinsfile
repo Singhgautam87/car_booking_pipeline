@@ -3,27 +3,16 @@ pipeline {
 
     environment {
         COMPOSE_FILE = "docker-compose.yml"
-        TERRAFORM_IMAGE = "hashicorp/terraform:1.6"
     }
-    stages { 
-        stage("Terraform Init & Apply (Dockerized)") {
+    
+    stages {
+        stage("Checkout Code") {
             steps {
-                sh """
-                docker run --rm \
-                  -v \$(pwd)/terraform:/infra \
-                  -v /var/run/docker.sock:/var/run/docker.sock \
-                  ${TERRAFORM_IMAGE} \
-                  -chdir=/infra init
-
-                docker run --rm \
-                  -v \$(pwd)/terraform:/infra \
-                  -v /var/run/docker.sock:/var/run/docker.sock \
-                  ${TERRAFORM_IMAGE} \
-                  -chdir=/infra apply -auto-approve
-                """
+                checkout scm
+                sh "echo 'Code checked out successfully' && ls -la"
             }
         }
-
+        
         stage("Start Containers") {
             steps {
                 sh "docker-compose up -d"
@@ -53,7 +42,7 @@ pipeline {
             }
         }
 
-        stage("Data Quality - Great Expectations (Dockerized)") {
+        stage("Data Quality - Great Expectations") {
             steps {
                 sh "docker-compose run --rm great_expectations"
             }
@@ -71,7 +60,7 @@ pipeline {
             echo "✅ PIPELINE COMPLETED SUCCESSFULLY"
         }
         failure {
-            echo "❌ PIPELINE FAILED – CHECK LOGS (TERRAFORM / SPARK / GE)"
+            echo "❌ PIPELINE FAILED – CHECK LOGS"
         }
     }
 }

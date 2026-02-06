@@ -9,99 +9,65 @@ pipeline {
         stage("Checkout Code") {
             steps {
                 checkout scm
-                sh "echo 'Code checked out successfully' && ls -la"
+                sh "ls -la"
+            }
+        }
+        
+        stage('Cleanup') {
+            steps {
+                sh '''
+                    # Stop GE if running
+                    docker stop great_expectations 2>/dev/null || true
+                    
+                    # Remove all containers except GE
+                    docker-compose down --remove-orphans
+                    
+                    # Clean conflicting containers
+                    docker ps -a | grep -E "postgres|mysql|kafka|zookeeper|spark" | awk '{print $1}' | xargs -r docker rm -f 2>/dev/null || true
+                '''
             }
         }
         
         stage('Start Containers') {
             steps {
-                script {
-                    sh '''
-                        echo "🔍 Checking container status..."
-                        
-                        # Function to check if container exists (running or stopped)
-                        container_exists() {
-                            docker ps -a --format '{{.Names}}' | grep -q "^$1$"
-                        }
-                        
-                        # Function to check if container is running
-                        container_running() {
-                            docker ps --format '{{.Names}}' | grep -q "^$1$"
-                        }
-                        
-                        # Great Expectations container handling
-                        if container_exists "great_expectations"; then
-                            if container_running "great_expectations"; then
-                                echo "✅ Great Expectations container already running - reusing it"
-                            else
-                                echo "🔄 Great Expectations container exists but stopped - starting it"
-                                docker start great_expectations
-                                sleep 5
-                            fi
-                        else
-                            echo "🚀 Creating and starting Great Expectations container..."
-                            docker-compose up -d great_expectations
-                            sleep 10
-                        fi
-                        
-                        # Start other containers
-                        echo "🚀 Starting other infrastructure containers..."
-                        docker-compose up -d
-                        
-                        # Wait for services to be ready
-                        echo "⏳ Waiting for all services to stabilize..."
-                        sleep 15
-                        
-                        # Show status
-                        echo "📋 Container Status:"
-                        docker-compose ps
-                        
-                        # Verify Great Expectations is healthy
-                        echo "🔍 Verifying Great Expectations setup..."
-                        docker exec great_expectations python -c "import great_expectations; print('✅ GE version:', great_expectations.__version__)" || {
-                            echo "❌ Great Expectations not working properly"
-                            exit 1
-                        }
-                    '''
-                }
+                sh '''
+                    # Start or reuse GE
+                    if docker ps -a -q -f name=^great_expectations$ | grep -q .; then
+                        docker start great_expectations || docker-compose up -d great_expectations
+                    else
+                        docker-compose up -d great_expectations
+                    fi
+                    
+                    sleep 10
+                    docker exec great_expectations python -c "import great_expectations"
+                    
+                    # Start other services
+                    docker-compose up -d
+                    sleep 20
+                    docker-compose ps
+                '''
             }
         }
 
         stage("Kafka Producer") {
             steps {
                 sh '''
-                    echo "📤 Starting Kafka producer..."
-                    
-                    # Wait for Kafka to be ready
-                    echo "⏳ Waiting for Kafka to be ready..."
-                    sleep 5
-                    
-                    # Create topic if not exists
-                    docker exec kafka kafka-topics --create --if-not-exists \
-                        --topic car-bookings \
-                        --bootstrap-server localhost:9092 \
-                        --partitions 3 \
-                        --replication-factor 1 || echo "Topic already exists or error creating"
-                    
-                    # Run producer
+                    sleep 10
+                    docker exec kafka kafka-topics --create --if-not-exists --topic car-bookings --bootstrap-server localhost:9092 --partitions 3 --replication-factor 1 || true
                     docker exec kafka python /kafka/producer.py
                 '''
             }
         }
 
-        stage("Spark Streaming Ingest") {
+        stage("Spark Streaming") {
             steps {
-                sh '''
-                    echo "⚡ Running Spark streaming job..."
-                    docker exec spark-master spark-submit /opt/spark-apps/ingest_stream.py
-                '''
+                sh "docker exec spark-master spark-submit /opt/spark-apps/ingest_stream.py"
             }
         }
 
         stage("Transform & Merge") {
             steps {
                 sh '''
-                    echo "🔄 Transforming and merging data..."
                     docker exec spark-master spark-submit /opt/spark-apps/transform_booking.py
                     docker exec spark-master spark-submit /opt/spark-apps/transform_customer.py
                     docker exec spark-master spark-submit /opt/spark-apps/merge_customer_booking.py
@@ -110,67 +76,29 @@ pipeline {
             }
         }
 
-        stage('Data Quality - Great Expectations') {
+        stage('Data Quality') {
             steps {
-                script {
-                    sh '''
-                        echo "📊 Running Great Expectations validations..."
-                        
-                        # Check if container is running
-                        if ! docker ps --format '{{.Names}}' | grep -q "^great_expectations$"; then
-                            echo "❌ Great Expectations container not running!"
-                            echo "🔄 Attempting to start..."
-                            docker start great_expectations || docker-compose up -d great_expectations
-                            sleep 5
-                        fi
-                        
-                        # Run checkpoint in existing container
-                        docker exec great_expectations python /ge/run_checkpoint.py
-                        
-                        # Check validation results
-                        if [ $? -eq 0 ]; then
-                            echo "✅ Data quality checks PASSED"
-                        else
-                            echo "❌ Data quality checks FAILED"
-                            exit 1
-                        fi
-                    '''
-                }
+                sh '''
+                    docker exec great_expectations python /ge/run_checkpoint.py
+                    echo "✅ Data quality checks passed"
+                '''
             }
         }
 
-        stage("Load MySQL (Final)") {
+        stage("Load MySQL") {
             steps {
-                sh '''
-                    echo "💾 Loading data to MySQL..."
-                    docker exec spark-master spark-submit /opt/spark-apps/write_to_mysql.py
-                '''
+                sh "docker exec spark-master spark-submit /opt/spark-apps/write_to_mysql.py"
             }
         }
     }
 
     post {
         success {
-            echo '✅ PIPELINE COMPLETED SUCCESSFULLY'
-            sh '''
-                echo "📋 Final Container Status:"
-                docker-compose ps
-            '''
+            echo "✅ Pipeline completed"
         }
         failure {
-            echo '❌ PIPELINE FAILED – CHECK LOGS'
-            sh '''
-                echo "📋 Container Status at Failure:"
-                docker-compose ps
-                
-                echo "📝 Great Expectations Container Logs:"
-                docker logs great_expectations --tail 50 || echo "Could not fetch GE logs"
-            '''
-        }
-        always {
-            sh '''
-                echo "🏁 Pipeline execution completed"
-            '''
+            echo "❌ Pipeline failed"
+            sh "docker-compose ps"
         }
     }
 }

@@ -23,7 +23,7 @@ pipeline {
                     docker-compose down --remove-orphans
                     
                     # Clean conflicting containers
-                    docker ps -a | grep -E "postgres|mysql|kafka|zookeeper|spark|minio|kafka-ui"| awk '{print $1}' | xargs -r docker rm -f 2>/dev/null || true
+                    docker ps -a | grep -E "postgres|mysql|kafka|zookeeper|spark|minio|kafka-ui" | awk '{print $1}' | xargs -r docker rm -f 2>/dev/null || true
                 '''
             }
         }
@@ -33,18 +33,18 @@ pipeline {
                 sh '''
                     # Start or reuse GE
                     if docker ps -a -q -f name=^great_expectations$ | grep -q .; then
-                        docker start great_expectations || docker compose up -d great_expectations
+                        docker start great_expectations || docker-compose up -d great_expectations
                     else
-                        docker compose up -d great_expectations
+                        docker-compose up -d great_expectations
                     fi
                     
                     sleep 10
                     docker exec great_expectations python -c "import great_expectations"
                     
-                    # Start other services
-                    docker-compose up -d
+                    # Start OTHER services (EXCLUDE great_expectations to avoid conflict)
+                    docker-compose up -d postgres mysql kafka zookeeper minio kafka-ui spark-master
                     sleep 20
-                    docker-compose ps  
+                    docker-compose ps
                 '''
             }
         }

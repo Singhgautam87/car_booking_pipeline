@@ -49,14 +49,14 @@ pipeline {
             }
         }
 
-        stage("Kafka Producer") {
+        stage('Kafka Producer') {
             steps {
-                sh '''
-                    sleep 10
-                    docker exec kafka kafka-topics --create --if-not-exists --topic car-bookings --bootstrap-server localhost:9092 --partitions 3 --replication-factor 1 || true
-                    docker exec kafka python /kafka/producer.py
-                '''
-            }
+                sh 'sleep 10'
+                sh 'docker exec kafka kafka-topics --create --if-not-exists --topic car-bookings --bootstrap-server localhost:9092 --partitions 3 --replication-factor 1'
+                sh 'docker exec great_expectations pip install kafka-python'
+                sh 'docker cp kafka/producer.py great_expectations:/tmp/producer.py'
+                sh 'docker exec great_expectations python /tmp/producer.py'
+            }  
         }
 
         stage("Spark Streaming") {

@@ -16,38 +16,32 @@ pipeline {
         stage('Cleanup') {
             steps {
                 sh '''
-                    # Stop GE if running
-                    docker stop great_expectations 2>/dev/null || true
-                    
-                    # Remove all containers except GE
+                    # Stop all containers
                     docker-compose down --remove-orphans
-                    
-                    # Clean conflicting containers
-                    docker ps -a | grep -E "postgres|mysql|kafka|zookeeper|spark|minio|kafka-ui" | awk '{print $1}' | xargs -r docker rm -f 2>/dev/null || true
+            
+                    # Clean up any remaining containers
+                    docker ps -a | grep -E "postgres|mysql|kafka|zookeeper|spark|minio|kafka-ui|great_expectations" | awk '{print $1}' | xargs -r docker rm -f || true
                 '''
             }
         }
-        
         stage('Start Containers') {
             steps {
                 sh '''
-                    # Start or reuse GE
-                    if docker ps -a -q -f name=^great_expectations$ | grep -q .; then
-                        docker start great_expectations || docker-compose up -d great_expectations
-                    else
-                        docker-compose up -d great_expectations
-                    fi
-                    
-                    sleep 10
-                    docker exec great_expectations python -c "import great_expectations"
-                    
-                    # Start OTHER services (use SERVICE names, not container names)
-                    docker-compose up -d postgres mysql kafka zookeeper minio kafka-ui spark
-                    sleep 20
+                    # Start all containers including great_expectations
+                    docker-compose up -d postgres mysql kafka zookeeper minio kafka-ui spark great_expectations
+            
+                    # Wait longer for Kafka to initialize
+                    sleep 40
+            
+                    # Verify Kafka is ready
+                    echo "Checking Kafka readiness..."
+                    docker exec kafka kafka-broker-api-versions --bootstrap-server localhost:9092 || echo "Kafka still initializing..."
+            
+                    # Show container status
                     docker-compose ps
                 '''
             }
-        }
+        }          
 
         stage('Kafka Producer') {
             steps {

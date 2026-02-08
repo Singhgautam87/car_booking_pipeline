@@ -130,6 +130,7 @@ services:
     volumes:
       - ./great_expectations:/ge
       - ./spark:/data  # Spark output data ke liye
+      - ./kafka:/kafka
     depends_on:
       - postgres
     command: tail -f /dev/null  # Container running rakhne ke liye

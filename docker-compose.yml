@@ -110,19 +110,18 @@ services:
     networks:
       - car-booking-network
 
-  jenkins:
-    image: jenkins/jenkins:lts
-    container_name: jenkins
-    user: root
-    restart: unless-stopped
-    ports:
-      - "8080:8080"
-      - "50000:50000"
-    volumes:
-      - jenkins_home:/var/jenkins_home
-      - /var/run/docker.sock:/var/run/docker.sock
-    networks:
-      - car-booking-network
+  #jenkins:
+    #image: jenkins/jenkins:lts
+    #container_name: jenkins
+    #user: root
+    #restart: unless-stopped
+    #  - "8080:8080"
+    #  - "50000:50000"
+    #volumes:
+    #  - jenkins_home:/var/jenkins_home
+    #  - /var/run/docker.sock:/var/run/docker.sock
+    #networks:
+    #  - car-booking-network
   
   great_expectations:
     build: ./great_expectations
@@ -147,6 +146,6 @@ networks:
     driver: bridge
 
 volumes:
-  jenkins_home:
+  #jenkins_home:
   postgres_data:
   mysql_data:

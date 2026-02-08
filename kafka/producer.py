@@ -7,7 +7,7 @@ producer = KafkaProducer(
     value_serializer=lambda v: json.dumps(v).encode("utf-8")
 )
 
-with open("C:\Users\gautam\car-booking-pipeline\kafka\data\car_booking.json") as f:
+with open("/kafka/data/car_booking.json") as f:
     records = json.load(f)
 
 for record in records:

@@ -24,29 +24,56 @@ pipeline {
                 '''
             }
         }
+        
         stage('Start Containers') {
             steps {
                 sh '''
-                    # Start all containers including great_expectations
+                    # Start all containers
                     docker-compose up -d postgres mysql kafka zookeeper minio kafka-ui spark great_expectations
             
-                    # Wait longer for Kafka to initialize
-                    sleep 40
+                    echo "⏳ Waiting for Kafka to initialize (60 seconds)..."
+                    sleep 60
             
-                    # Verify Kafka is ready
-                    echo "Checking Kafka readiness..."
-                    docker exec kafka kafka-broker-api-versions --bootstrap-server localhost:9092 || echo "Kafka still initializing..."
+                    # Show Kafka logs for debugging
+                    echo "=== Kafka Logs (Last 30 lines) ==="
+                    docker logs kafka --tail 30 || echo "Could not fetch Kafka logs"
+            
+                    # Retry Kafka readiness check
+                    for i in 1 2 3 4 5; do
+                        echo "Checking Kafka readiness (attempt $i/5)..."
+                        if docker exec kafka kafka-broker-api-versions --bootstrap-server localhost:9092 2>/dev/null; then
+                            echo "✅ Kafka is ready!"
+                            break
+                        else
+                            echo "⏳ Kafka not ready, waiting 10 more seconds..."
+                            sleep 10
+                        fi
+                    done
             
                     # Show container status
                     docker-compose ps
                 '''
             }
-        }          
+        }
 
         stage('Kafka Producer') {
             steps {
-                sh 'sleep 10'
-                sh 'docker exec kafka kafka-topics --create --if-not-exists --topic car-bookings --bootstrap-server localhost:9092 --partitions 3 --replication-factor 1'
+                sh 'sleep 5'
+                
+                // Create topic with retry logic
+                sh '''
+                    for i in 1 2 3 4 5; do
+                        echo "Creating Kafka topic (attempt $i/5)..."
+                        if docker exec kafka kafka-topics --create --if-not-exists --topic car-bookings --bootstrap-server localhost:9092 --partitions 3 --replication-factor 1 2>/dev/null; then
+                            echo "✅ Topic created successfully!"
+                            break
+                        else
+                            echo "⏳ Retrying topic creation..."
+                            sleep 5
+                        fi
+                    done
+                '''
+                
                 sh 'docker exec great_expectations pip install kafka-python'
                 sh 'docker cp kafka/data/car_booking.json great_expectations:/tmp/car_booking.json'
                 sh 'docker cp kafka/producer.py great_expectations:/tmp/producer.py'
@@ -89,11 +116,17 @@ pipeline {
 
     post {
         success {
-            echo "✅ Pipeline completed"
+            echo "✅ Pipeline completed successfully!"
         }
         failure {
             echo "❌ Pipeline failed"
-            sh "docker-compose ps"
+            sh '''
+                echo "=== Container Status ==="
+                docker-compose ps
+                echo ""
+                echo "=== Kafka Logs ==="
+                docker logs kafka --tail 50 || echo "Kafka logs unavailable"
+            '''
         }
     }
 }

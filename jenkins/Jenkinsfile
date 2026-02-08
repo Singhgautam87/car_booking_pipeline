@@ -41,8 +41,8 @@ pipeline {
                     sleep 10
                     docker exec great_expectations python -c "import great_expectations"
                     
-                    # Start OTHER services (EXCLUDE great_expectations to avoid conflict)
-                    docker-compose up -d postgres mysql kafka zookeeper minio kafka-ui spark-master
+                    # Start OTHER services (use SERVICE names, not container names)
+                    docker-compose up -d postgres mysql kafka zookeeper minio kafka-ui spark
                     sleep 20
                     docker-compose ps
                 '''

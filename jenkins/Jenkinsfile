@@ -83,7 +83,7 @@ pipeline {
 
         stage("Spark Streaming") {
             steps {
-                sh "docker exec spark-master spark-submit /opt/spark-apps/ingest_stream.py"
+                sh 'docker exec spark-master /opt/spark/bin/spark-submit /opt/spark-apps/ingest_stream.py'
             }
         }
 

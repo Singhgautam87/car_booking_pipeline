@@ -23,7 +23,7 @@ pipeline {
                     docker-compose down --remove-orphans
                     
                     # Clean conflicting containers
-                    docker ps -a | grep -E "postgres|mysql|kafka|zookeeper|spark" | awk '{print $1}' | xargs -r docker rm -f 2>/dev/null || true
+                    docker ps -a | grep -E "postgres|mysql|kafka|zookeeper|spark|minio|kafka-ui"| awk '{print $1}' | xargs -r docker rm -f 2>/dev/null || true
                 '''
             }
         }

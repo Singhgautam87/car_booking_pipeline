@@ -65,7 +65,7 @@ services:
     depends_on:
       - kafka
     volumes:
-      - ./spark:/opt/spark-apps
+      - C:/Users/gautam/car-booking-pipeline/spark:/opt/spark-apps
     command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
     networks:
       - car-booking-network

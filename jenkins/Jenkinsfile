@@ -81,9 +81,13 @@ pipeline {
             }  
         }
 
-        stage("Spark Streaming") {
+        stage('Spark Streaming') {
             steps {
-                sh 'docker exec spark-master /opt/spark/bin/spark-submit /opt/spark-apps/ingest_stream.py'
+                sh '''
+                    docker exec spark-master /opt/spark/bin/spark-submit \
+                    --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.2,org.postgresql:postgresql:42.5.0,mysql:mysql-connector-java:8.0.33 \
+                    /opt/spark-apps/ingest_stream.py
+                '''
             }
         }
 

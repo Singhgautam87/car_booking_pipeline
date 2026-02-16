@@ -81,6 +81,20 @@ pipeline {
             }  
         }
 
+        stage('Setup MinIO Bucket') {
+            steps {
+                sh '''
+                    echo "📦 Creating MinIO bucket..."
+            
+                    # MinIO client already available in minio container
+                    docker exec minio mc alias set local http://localhost:9000 admin admin123
+                    docker exec minio mc mb local/raw --ignore-existing
+            
+                    echo "✅ Bucket 'raw' ready!"
+                '''
+            }
+        }
+
         stage('Spark Streaming') {
             steps {
                 sh '''

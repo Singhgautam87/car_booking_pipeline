@@ -84,9 +84,11 @@ pipeline {
         stage('Spark Streaming') {
             steps {
                 sh '''
+                    docker exec -u root spark-master mkdir -p /home/spark/.ivy2/cache
+                    docker exec -u root spark-master chown -R spark:spark /home/spark/.ivy2
                     docker exec spark-master /opt/spark/bin/spark-submit \
-                    --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.2,org.postgresql:postgresql:42.5.0,mysql:mysql-connector-java:8.0.33 \
-                    /opt/spark-apps/ingest_stream.py
+                        --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.2,org.postgresql:postgresql:42.5.0,mysql:mysql-connector-java:8.0.33 \
+                        /opt/spark-apps/ingest_stream.py
                 '''
             }
         }

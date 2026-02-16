@@ -103,8 +103,8 @@ pipeline {
                     docker exec spark-master /opt/spark/bin/spark-submit \
                         --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.2,org.postgresql:postgresql:42.5.0,mysql:mysql-connector-java:8.0.33,org.apache.hadoop:hadoop-aws:3.3.4 \
                         --conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 \
-                        --conf spark.hadoop.fs.s3a.access.key=minioadmin \
-                        --conf spark.hadoop.fs.s3a.secret.key=minioadmin \
+                        --conf spark.hadoop.fs.s3a.access.key=admin \
+                        --conf spark.hadoop.fs.s3a.secret.key=admin123 \
                         --conf spark.hadoop.fs.s3a.path.style.access=true \
                         --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem \
                         /opt/spark-apps/ingest_stream.py

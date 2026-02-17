@@ -28,6 +28,8 @@ df = spark.readStream \
     .option("subscribe", "raw_car_booking") \
     .option("startingOffsets", "earliest") \
     .option("failOnDataLoss", "false") \
+    .option("kafka.metadata.max.age.ms", "5000") \
+    .option("kafka.session.timeout.ms", "30000")  \ 
     .load()
 
 json_df = df.select(from_json(col("value").cast("string"), schema).alias("data")).select("data.*")

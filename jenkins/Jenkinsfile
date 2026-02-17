@@ -78,6 +78,9 @@ pipeline {
                 sh 'docker cp kafka/data/car_booking.json great_expectations:/tmp/car_booking.json'
                 sh 'docker cp kafka/producer.py great_expectations:/tmp/producer.py'
                 sh 'docker exec great_expectations python /tmp/producer.py'
+                sh 'echo "⏳ Waiting for Kafka to stabilize..."'
+                sh 'sleep 30'
+                sh 'docker exec kafka kafka-topics --describe --topic car-bookings --bootstrap-server localhost:9092'
             }  
         }
 

@@ -1,4 +1,13 @@
 from pyspark.sql.functions import lower, regexp_replace
+from pyspark.sql import SparkSession
+spark = SparkSession.builder \
+    .appName("CarBookingTransform") \
+    .config("spark.hadoop.fs.s3a.endpoint", "http://minio:9000") \
+    .config("spark.hadoop.fs.s3a.access.key", "minioadmin") \
+    .config("spark.hadoop.fs.s3a.secret.key", "minioadmin") \
+    .config("spark.hadoop.fs.s3a.path.style.access", "true") \
+    .getOrCreate()
+
 
 df = spark.read.parquet("s3a://raw/car_booking")
 

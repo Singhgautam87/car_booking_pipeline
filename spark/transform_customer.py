@@ -3,8 +3,8 @@ from pyspark.sql import SparkSession
 spark = SparkSession.builder \
     .appName("CarBookingTransform") \
     .config("spark.hadoop.fs.s3a.endpoint", "http://minio:9000") \
-    .config("spark.hadoop.fs.s3a.access.key", "minioadmin") \
-    .config("spark.hadoop.fs.s3a.secret.key", "minioadmin") \
+    .config("spark.hadoop.fs.s3a.access.key", "admin") \
+    .config("spark.hadoop.fs.s3a.secret.key", "admin123") \
     .config("spark.hadoop.fs.s3a.path.style.access", "true") \
     .getOrCreate()
 

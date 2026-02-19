@@ -3,6 +3,9 @@ pipeline {
 
     environment {
         COMPOSE_FILE = "docker-compose.yml"
+        SPARK_SUBMIT = "docker exec spark-master /opt/spark/bin/spark-submit"
+        SPARK_PACKAGES = "org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.2,org.postgresql:postgresql:42.5.0,mysql:mysql-connector-java:8.0.33,org.apache.hadoop:hadoop-aws:3.3.4"
+        S3_CONF = "--conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 --conf spark.hadoop.fs.s3a.access.key=admin --conf spark.hadoop.fs.s3a.secret.key=admin123 --conf spark.hadoop.fs.s3a.path.style.access=true --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem"
     }
     
     stages {
@@ -16,10 +19,7 @@ pipeline {
         stage('Cleanup') {
             steps {
                 sh '''
-                    # Stop all containers
                     docker-compose down --remove-orphans
-            
-                    # Clean up any remaining containers
                     docker ps -a | grep -E "postgres|mysql|kafka|zookeeper|spark|minio|kafka-ui|great_expectations" | awk '{print $1}' | xargs -r docker rm -f || true
                 '''
             }
@@ -28,17 +28,11 @@ pipeline {
         stage('Start Containers') {
             steps {
                 sh '''
-                    # Start all containers
                     docker-compose up -d postgres mysql kafka zookeeper minio kafka-ui spark great_expectations
-            
                     echo "⏳ Waiting for Kafka to initialize (60 seconds)..."
                     sleep 60
-            
-                    # Show Kafka logs for debugging
                     echo "=== Kafka Logs (Last 30 lines) ==="
                     docker logs kafka --tail 30 || echo "Could not fetch Kafka logs"
-            
-                    # Retry Kafka readiness check
                     for i in 1 2 3 4 5; do
                         echo "Checking Kafka readiness (attempt $i/5)..."
                         if docker exec kafka kafka-broker-api-versions --bootstrap-server localhost:9092 2>/dev/null; then
@@ -49,8 +43,6 @@ pipeline {
                             sleep 10
                         fi
                     done
-            
-                    # Show container status
                     docker-compose ps
                 '''
             }
@@ -59,8 +51,6 @@ pipeline {
         stage('Kafka Producer') {
             steps {
                 sh 'sleep 5'
-                
-                // Create topic with retry logic
                 sh '''
                     for i in 1 2 3 4 5; do
                         echo "Creating Kafka topic (attempt $i/5)..."
@@ -73,12 +63,10 @@ pipeline {
                         fi
                     done
                 '''
-                
                 sh 'docker exec great_expectations pip install kafka-python'
                 sh 'docker cp kafka/data/car_booking.json great_expectations:/tmp/car_booking.json'
                 sh 'docker cp kafka/producer.py great_expectations:/tmp/producer.py'
                 sh 'docker exec great_expectations python /tmp/producer.py'
-                sh 'echo "⏳ Waiting for Kafka to stabilize..."'
                 sh 'sleep 60'
                 sh 'docker exec kafka kafka-topics --describe --topic car-bookings --bootstrap-server localhost:9092'
             }  
@@ -87,12 +75,8 @@ pipeline {
         stage('Setup MinIO Bucket') {
             steps {
                 sh '''
-                    echo "📦 Creating MinIO bucket..."
-            
-                    # MinIO client already available in minio container
                     docker exec minio mc alias set local http://localhost:9000 admin admin123
                     docker exec minio mc mb local/raw --ignore-existing
-            
                     echo "✅ Bucket 'raw' ready!"
                 '''
             }
@@ -102,31 +86,18 @@ pipeline {
             steps {
                 sh 'docker exec -u root spark-master mkdir -p /home/spark/.ivy2/cache'
                 sh 'docker exec -u root spark-master chown -R spark:spark /home/spark/.ivy2'
-        
-                retry(3) {  
-                    sh '''
-                        docker exec spark-master /opt/spark/bin/spark-submit \\
-                            --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.2,org.postgresql:postgresql:42.5.0,mysql:mysql-connector-java:8.0.33,org.apache.hadoop:hadoop-aws:3.3.4 \\
-                            --conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 \\
-                            --conf spark.hadoop.fs.s3a.access.key=admin \\
-                            --conf spark.hadoop.fs.s3a.secret.key=admin123 \\
-                            --conf spark.hadoop.fs.s3a.path.style.access=true \\
-                            --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem \\
-                            /opt/spark-apps/ingest_stream.py
-                    '''
-                }  
+                retry(3) {
+                    sh "$SPARK_SUBMIT --packages $SPARK_PACKAGES $S3_CONF /opt/spark-apps/ingest_stream.py"
+                }
             }
         }
 
         stage("Transform & Merge") {
             steps {
-                sh '''
-                    docker exec spark-master /opt/spark/bin/spark-submit /opt/spark-apps/transform_booking.py
-                    docker exec spark-master /opt/spark/bin/spark-submit /opt/spark-apps/transform_customer.py
-                    docker exec spark-master /opt/spark/bin/spark-submit /opt/spark-apps/merge_customer_booking.py
-                    docker exec spark-master /opt/spark/bin/spark-submit /opt/spark-apps/write_to_postgres.py
-
-                '''
+                sh "$SPARK_SUBMIT --packages $SPARK_PACKAGES $S3_CONF /opt/spark-apps/transform_booking.py"
+                sh "$SPARK_SUBMIT --packages $SPARK_PACKAGES $S3_CONF /opt/spark-apps/transform_customer.py"
+                sh "$SPARK_SUBMIT --packages $SPARK_PACKAGES $S3_CONF /opt/spark-apps/merge_customer_booking.py"
+                sh "$SPARK_SUBMIT --packages $SPARK_PACKAGES $S3_CONF /opt/spark-apps/write_to_postgres.py"
             }
         }
 
@@ -141,7 +112,7 @@ pipeline {
 
         stage("Load MySQL") {
             steps {
-                sh "docker exec spark-master /opt/spark/bin/spark-submit /opt/spark-apps/write_to_mysql.py"
+                sh "$SPARK_SUBMIT --packages $SPARK_PACKAGES $S3_CONF /opt/spark-apps/write_to_mysql.py"
             }
         }
     }

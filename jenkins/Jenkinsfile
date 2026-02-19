@@ -78,7 +78,8 @@ pipeline {
                     docker exec minio mc alias set local http://localhost:9000 admin admin123
                     docker exec minio mc mb local/raw --ignore-existing
                     docker exec minio mc mb local/processed --ignore-existing
-                    echo "✅ Buckets 'raw' and 'processed' ready!"
+                    docker exec minio mc mb local/curated --ignore-existing
+                    echo "✅ Buckets 'raw', 'processed', and 'curated' ready!"
                 '''
             }
         }

@@ -121,10 +121,11 @@ pipeline {
         stage("Transform & Merge") {
             steps {
                 sh '''
-                    docker exec spark-master spark-submit /opt/spark-apps/transform_booking.py
-                    docker exec spark-master spark-submit /opt/spark-apps/transform_customer.py
-                    docker exec spark-master spark-submit /opt/spark-apps/merge_customer_booking.py
-                    docker exec spark-master spark-submit /opt/spark-apps/write_to_postgres.py
+                    docker exec spark-master /opt/spark/bin/spark-submit /opt/spark-apps/transform_booking.py
+                    docker exec spark-master /opt/spark/bin/spark-submit /opt/spark-apps/transform_customer.py
+                    docker exec spark-master /opt/spark/bin/spark-submit /opt/spark-apps/merge_customer_booking.py
+                    docker exec spark-master /opt/spark/bin/spark-submit /opt/spark-apps/write_to_postgres.py
+
                 '''
             }
         }
@@ -140,7 +141,7 @@ pipeline {
 
         stage("Load MySQL") {
             steps {
-                sh "docker exec spark-master spark-submit /opt/spark-apps/write_to_mysql.py"
+                sh "docker exec spark-master /opt/spark/bin/spark-submit /opt/spark-apps/write_to_mysql.py"
             }
         }
     }

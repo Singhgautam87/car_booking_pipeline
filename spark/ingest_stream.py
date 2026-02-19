@@ -40,4 +40,4 @@ query = json_df.writeStream \
     .option("checkpointLocation", "/tmp/checkpoint") \
     .start()
 
-query.awaitTermination()
+query.awaitTermination(timeout=120)

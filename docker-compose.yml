@@ -66,6 +66,8 @@ services:
       - kafka
     volumes:
       - C:/Users/gautam/car-booking-pipeline/spark:/opt/spark-apps
+      - C:/Users/gautam/car-booking-pipeline/config:/opt/config
+      - C:/Users/gautam/car-booking-pipeline/reports:/opt/reports
     command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
     networks:
       - car-booking-network
@@ -98,6 +100,7 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./sql/postgres.sql:/docker-entrypoint-initdb.d/init.sql
     networks:
       - car-booking-network
 
@@ -114,6 +117,7 @@ services:
       - "3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
+      - ./sql/mysql.sql:/docker-entrypoint-initdb.d/init.sql
     networks:
       - car-booking-network
 
@@ -136,11 +140,12 @@ services:
     restart: unless-stopped
     volumes:
       - ./great_expectations:/ge
-      - ./spark:/data  # Spark output data ke liye
-      - ./kafka:/kafka
+      - C:/Users/gautam/car-booking-pipeline/config:/opt/config
+      - C:/Users/gautam/car-booking-pipeline/reports:/opt/reports
+      - ./spark/lib:/opt/spark/lib
     depends_on:
       - postgres
-    command: tail -f /dev/null  # Container running rakhne ke liye
+    command: tail -f /dev/null
     healthcheck:
       test: ["CMD", "python", "-c", "import great_expectations"]
       interval: 30s

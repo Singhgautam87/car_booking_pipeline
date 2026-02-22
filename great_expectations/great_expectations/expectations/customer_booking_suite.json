@@ -1,42 +1,61 @@
 {
   "expectation_suite_name": "customer_booking_suite",
   "expectations": [
-    {
-      "expectation_type": "expect_column_values_to_not_be_null",
-      "kwargs": {
-        "column": "customer_id"
-      }
-    },
-    {
-      "expectation_type": "expect_column_values_to_not_be_null",
-      "kwargs": {
-        "column": "booking_id"
-      }
-    },
-    {
-      "expectation_type": "expect_column_values_to_be_unique",
-      "kwargs": {
-        "column": "booking_id"
-      }
-    },
-    {
-      "expectation_type": "expect_column_values_to_be_in_set",
-      "kwargs": {
-        "column": "booking_status",
-        "value_set": [
-          "completed",
-          "cancelled",
-          "in_progress",
-          "created"
-        ]
-      }
-    },
-    {
-      "expectation_type": "expect_column_values_to_match_regex",
-      "kwargs": {
-        "column": "email",
-        "regex": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
-      }
-    }
+    {"expectation_type": "expect_table_row_count_to_be_between",
+     "kwargs": {"min_value": 1, "max_value": 1000000}},
+    {"expectation_type": "expect_column_to_exist",
+     "kwargs": {"column": "booking_id"}},
+    {"expectation_type": "expect_column_to_exist",
+     "kwargs": {"column": "customer_id"}},
+    {"expectation_type": "expect_column_values_to_not_be_null",
+     "kwargs": {"column": "booking_id"}},
+    {"expectation_type": "expect_column_values_to_be_unique",
+     "kwargs": {"column": "booking_id"}},
+    {"expectation_type": "expect_column_values_to_not_be_null",
+     "kwargs": {"column": "customer_id"}},
+    {"expectation_type": "expect_column_values_to_not_be_null",
+     "kwargs": {"column": "customer_name"}},
+    {"expectation_type": "expect_column_values_to_not_be_null",
+     "kwargs": {"column": "email"}},
+    {"expectation_type": "expect_column_values_to_match_regex",
+     "kwargs": {"column": "email", "regex": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"}},
+    {"expectation_type": "expect_column_values_to_not_be_null",
+     "kwargs": {"column": "loyalty_tier"}},
+    {"expectation_type": "expect_column_values_to_be_in_set",
+     "kwargs": {"column": "loyalty_tier",
+                "value_set": ["platinum", "gold", "silver", "bronze"]}},
+    {"expectation_type": "expect_column_values_to_not_be_null",
+     "kwargs": {"column": "loyalty_points"}},
+    {"expectation_type": "expect_column_values_to_be_between",
+     "kwargs": {"column": "loyalty_points", "min_value": 0}},
+    {"expectation_type": "expect_column_values_to_not_be_null",
+     "kwargs": {"column": "booking_date"}},
+    {"expectation_type": "expect_column_values_to_not_be_null",
+     "kwargs": {"column": "pickup_location"}},
+    {"expectation_type": "expect_column_values_to_not_be_null",
+     "kwargs": {"column": "drop_location"}},
+    {"expectation_type": "expect_column_values_to_not_be_null",
+     "kwargs": {"column": "car_id"}},
+    {"expectation_type": "expect_column_values_to_not_be_null",
+     "kwargs": {"column": "model"}},
+    {"expectation_type": "expect_column_values_to_not_be_null",
+     "kwargs": {"column": "price_per_day"}},
+    {"expectation_type": "expect_column_values_to_be_between",
+     "kwargs": {"column": "price_per_day", "min_value": 0}},
+    {"expectation_type": "expect_column_values_to_not_be_null",
+     "kwargs": {"column": "insurance_provider"}},
+    {"expectation_type": "expect_column_values_to_not_be_null",
+     "kwargs": {"column": "insurance_coverage"}},
+    {"expectation_type": "expect_column_values_to_be_in_set",
+     "kwargs": {"column": "insurance_coverage",
+                "value_set": ["full", "partial"]}},
+    {"expectation_type": "expect_column_values_to_not_be_null",
+     "kwargs": {"column": "payment_id"}},
+    {"expectation_type": "expect_column_values_to_not_be_null",
+     "kwargs": {"column": "payment_method"}},
+    {"expectation_type": "expect_column_values_to_not_be_null",
+     "kwargs": {"column": "payment_amount"}},
+    {"expectation_type": "expect_column_values_to_be_between",
+     "kwargs": {"column": "payment_amount", "min_value": 0}}
   ]
 }

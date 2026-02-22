@@ -4,18 +4,19 @@ pipeline {
     environment {
         COMPOSE_FILE = "docker-compose.yml"
         SPARK_SUBMIT = "docker exec spark-master /opt/spark/bin/spark-submit"
-        SPARK_PACKAGES = "org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.2,org.postgresql:postgresql:42.5.0,mysql:mysql-connector-java:8.0.33,org.apache.hadoop:hadoop-aws:3.3.4"
+        SPARK_PACKAGES = "org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.2,org.postgresql:postgresql:42.5.0,mysql:mysql-connector-java:8.0.33,org.apache.hadoop:hadoop-aws:3.3.4,io.delta:delta-core_2.12:3.0.0"
+        DELTA_CONF = "--conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog"
         S3_CONF = "--conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 --conf spark.hadoop.fs.s3a.access.key=admin --conf spark.hadoop.fs.s3a.secret.key=admin123 --conf spark.hadoop.fs.s3a.path.style.access=true --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem"
     }
-    
+
     stages {
-        stage("Checkout Code") {
+        stage('Checkout Code') {
             steps {
                 checkout scm
-                sh "ls -la"
+                sh 'ls -la'
             }
         }
-        
+
         stage('Cleanup') {
             steps {
                 sh '''
@@ -24,26 +25,52 @@ pipeline {
                 '''
             }
         }
-        
+
         stage('Start Containers') {
             steps {
                 sh '''
                     docker-compose up -d postgres mysql kafka zookeeper minio kafka-ui spark great_expectations
-                    echo "⏳ Waiting for Kafka to initialize (60 seconds)..."
+                    echo "Waiting for Kafka to initialize (60 seconds)..."
                     sleep 60
                     echo "=== Kafka Logs (Last 30 lines) ==="
                     docker logs kafka --tail 30 || echo "Could not fetch Kafka logs"
                     for i in 1 2 3 4 5; do
                         echo "Checking Kafka readiness (attempt $i/5)..."
                         if docker exec kafka kafka-broker-api-versions --bootstrap-server localhost:9092 2>/dev/null; then
-                            echo "✅ Kafka is ready!"
+                            echo "Kafka is ready!"
                             break
                         else
-                            echo "⏳ Kafka not ready, waiting 10 more seconds..."
+                            echo "Kafka not ready, waiting 10 more seconds..."
                             sleep 10
                         fi
                     done
                     docker-compose ps
+                '''
+            }
+        }
+
+        stage('Initialize Databases') {
+            steps {
+                sh '''
+                    echo "Waiting for PostgreSQL..."
+                    for i in $(seq 1 30); do
+                        if docker exec postgres pg_isready -U admin -d booking >/dev/null 2>&1; then
+                            echo "PostgreSQL ready!"
+                            break
+                        fi
+                        sleep 2
+                    done
+
+                    echo "Waiting for MySQL..."
+                    for i in $(seq 1 30); do
+                        if docker exec mysql mysqladmin ping -u admin -padmin >/dev/null 2>&1; then
+                            echo "MySQL ready!"
+                            break
+                        fi
+                        sleep 2
+                    done
+
+                    echo "All databases ready!"
                 '''
             }
         }
@@ -54,84 +81,151 @@ pipeline {
                 sh '''
                     for i in 1 2 3 4 5; do
                         echo "Creating Kafka topic (attempt $i/5)..."
-                        if docker exec kafka kafka-topics --create --if-not-exists --topic car-bookings --bootstrap-server localhost:9092 --partitions 3 --replication-factor 1 2>/dev/null; then
-                            echo "✅ Topic created successfully!"
+                        if docker exec kafka kafka-topics --create --if-not-exists \
+                            --topic car-bookings \
+                            --bootstrap-server localhost:9092 \
+                            --partitions 3 \
+                            --replication-factor 1 2>/dev/null; then
+                            echo "Topic created!"
                             break
-                        else
-                            echo "⏳ Retrying topic creation..."
-                            sleep 5
                         fi
+                        sleep 5
                     done
                 '''
-                sh 'docker exec great_expectations pip install kafka-python'
+                sh 'docker exec great_expectations pip install kafka-python --quiet'
                 sh 'docker cp kafka/data/car_booking.json great_expectations:/tmp/car_booking.json'
                 sh 'docker cp kafka/producer.py great_expectations:/tmp/producer.py'
                 sh 'docker exec great_expectations python /tmp/producer.py'
                 sh 'sleep 60'
                 sh 'docker exec kafka kafka-topics --describe --topic car-bookings --bootstrap-server localhost:9092'
-            }  
+            }
         }
 
-        stage('Setup MinIO Bucket') {
+        stage('Setup MinIO Buckets') {
             steps {
                 sh '''
-                    docker exec minio mc alias set local http://localhost:9000 admin admin123
-                    docker exec minio mc mb local/raw --ignore-existing
-                    docker exec minio mc mb local/processed --ignore-existing
-                    docker exec minio mc mb local/curated --ignore-existing
-                    echo "✅ Buckets 'raw', 'processed', and 'curated' ready!"
+                    docker run --rm \
+                        --network car-booking-network \
+                        minio/mc \
+                        alias set local http://minio:9000 admin admin123
+
+                    docker run --rm \
+                        --network car-booking-network \
+                        minio/mc \
+                        mb local/delta --ignore-existing
+
+                    echo "✅ MinIO buckets ready!"
                 '''
             }
         }
 
-        stage('Spark Streaming') {
+        stage('Spark Ingest Stream') {
             steps {
                 sh 'docker exec -u root spark-master mkdir -p /home/spark/.ivy2/cache'
                 sh 'docker exec -u root spark-master chown -R spark:spark /home/spark/.ivy2'
                 retry(3) {
-                    sh "$SPARK_SUBMIT --packages $SPARK_PACKAGES $S3_CONF /opt/spark-apps/ingest_stream.py"
+                    timeout(time: 3, unit: 'MINUTES') {
+                        sh '''
+                            echo "Kafka se data ingest, parse, explode aur split..."
+                            $SPARK_SUBMIT --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
+                                /opt/spark-apps/jobs/ingest_stream.py
+                            echo "✅ Raw data Delta Lake mein split!"
+                        '''
+                    }
                 }
             }
         }
 
-        stage("Transform & Merge") {
-            steps {
-                sh "$SPARK_SUBMIT --packages $SPARK_PACKAGES $S3_CONF /opt/spark-apps/transform_booking.py"
-                sh "$SPARK_SUBMIT --packages $SPARK_PACKAGES $S3_CONF /opt/spark-apps/transform_customer.py"
-                sh "$SPARK_SUBMIT --packages $SPARK_PACKAGES $S3_CONF /opt/spark-apps/merge_customer_booking.py"
-                sh "$SPARK_SUBMIT --packages $SPARK_PACKAGES $S3_CONF /opt/spark-apps/write_to_postgres.py"
-            }
-        }
-
-        stage('Data Quality') {
+        stage('Transform Data') {
             steps {
                 sh '''
-                    docker exec great_expectations python /ge/run_checkpoint.py
-                    echo "✅ Data quality checks passed"
+                    echo "Customer transform..."
+                    $SPARK_SUBMIT --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
+                        /opt/spark-apps/jobs/transform_customer.py
+                    echo "✅ Customer done"
+
+                    echo "Booking transform..."
+                    $SPARK_SUBMIT --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
+                        /opt/spark-apps/jobs/transform_booking.py
+                    echo "✅ Booking done"
+
+                    echo "Cars transform..."
+                    $SPARK_SUBMIT --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
+                        /opt/spark-apps/jobs/transform_cars.py
+                    echo "✅ Cars done"
+
+                    echo "Payments transform..."
+                    $SPARK_SUBMIT --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
+                        /opt/spark-apps/jobs/transform_payments.py
+                    echo "✅ Payments done"
                 '''
             }
         }
 
-        stage("Load MySQL") {
+        stage('Merge Data') {
             steps {
-                sh "$SPARK_SUBMIT --packages $SPARK_PACKAGES $S3_CONF /opt/spark-apps/write_to_mysql.py"
+                sh '''
+                    echo "Merging all data..."
+                    $SPARK_SUBMIT --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
+                        /opt/spark-apps/jobs/merge.py
+                    echo "✅ Data merged!"
+                '''
+            }
+        }
+
+        stage('Write to PostgreSQL Staging') {
+            steps {
+                sh '''
+                    echo "Writing to PostgreSQL staging..."
+                    $SPARK_SUBMIT --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
+                        /opt/spark-apps/jobs/write_to_postgres.py
+                    echo "✅ PostgreSQL staging ready!"
+                '''
+            }
+        }
+
+        stage('Great Expectations Validation') {
+            steps {
+                sh '''
+                    echo "Installing GE dependencies..."
+                    docker exec great_expectations pip install psycopg2-binary sqlalchemy --quiet
+                '''
+                sh '''
+                    echo "Running GE validation..."
+                    docker exec great_expectations python /ge/jobs/run_ge.py
+                    echo "✅ Validation complete!"
+                '''
+            }
+        }
+
+        stage('Load MySQL') {
+            steps {
+                sh '''
+                    echo "Writing to MySQL..."
+                    $SPARK_SUBMIT --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
+                        /opt/spark-apps/jobs/write_to_mysql.py
+                    echo "✅ MySQL load complete!"
+                '''
             }
         }
     }
 
     post {
         success {
-            echo "✅ Pipeline completed successfully!"
+            echo "✅ Pipeline successfully complete!"
         }
         failure {
-            echo "❌ Pipeline failed"
             sh '''
                 echo "=== Container Status ==="
                 docker-compose ps
-                echo ""
                 echo "=== Kafka Logs ==="
-                docker logs kafka --tail 50 || echo "Kafka logs unavailable"
+                docker logs kafka --tail 50 || true
+                echo "=== Spark Logs ==="
+                docker logs spark-master --tail 50 || true
+                echo "=== GE Logs ==="
+                docker logs great_expectations --tail 50 || true
             '''
+            echo "❌ Pipeline failed!"
         }
     }
 }

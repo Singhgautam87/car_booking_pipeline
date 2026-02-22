@@ -4,9 +4,9 @@ datasources:
   postgres_ds:
     execution_engine:
       class_name: SqlAlchemyExecutionEngine
-      connection_string: postgresql+psycopg2://postgres:postgres@postgres:5432/car_booking
+      connection_string: postgresql+psycopg2://admin:admin@postgres:5432/booking
     data_connectors:
-      default_runtime_data_connector_name:
+      default:
         class_name: RuntimeDataConnector
         batch_identifiers:
           - default_identifier_name
@@ -33,4 +33,3 @@ stores:
 expectations_store_name: expectations_store
 checkpoint_store_name: checkpoint_store
 validation_results_store_name: validation_results_store
-

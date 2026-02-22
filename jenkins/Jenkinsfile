@@ -189,10 +189,6 @@ pipeline {
         stage('Great Expectations Validation') {
             steps {
                 sh '''
-                    echo "Installing GE dependencies..."
-                    docker exec great_expectations pip install psycopg2-binary sqlalchemy --quiet
-                '''
-                sh '''
                     docker exec great_expectations mkdir -p /ge/jobs
                     docker cp great_expectations/jobs/run_ge.py great_expectations:/ge/jobs/run_ge.py
                 '''
@@ -206,7 +202,8 @@ pipeline {
 
         stage('Load MySQL') {
             steps {
-                timeout(time: 15, unit: 'MINUTES') {          // ✅ naya add kiya
+                sh 'docker exec spark-master pip install mysql-connector-python --quiet'
+                timeout(time: 15, unit: 'MINUTES') {          
                     sh '''
                         echo "Writing to MySQL..."
                         $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \

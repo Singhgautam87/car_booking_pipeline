@@ -26,7 +26,8 @@ def run_quality_checks():
     try:
         ge_project_dir = '/ge/great_expectations'
 
-        context = FileDataContext(project_config_relative_to=ge_project_dir)
+        context = FileDataContext(context_root_dir=ge_project_dir)
+
         print("\n📊 Running Data Quality Validation...")
 
         db_user = postgres_cfg.get('user', 'admin')

@@ -17,7 +17,7 @@ def create_producer(max_retries=10, retry_delay=3):
                 # ✅ Performance settings
                 batch_size=65536,        # 64KB batch (default 16KB)
                 linger_ms=10,            # 10ms wait to fill batch
-                compression_type='snappy',  # compress karo
+                compression_type='gzip',  # compress karo
                 buffer_memory=67108864,  # 64MB buffer
                 acks=1,                  # sirf leader ack kare
             )

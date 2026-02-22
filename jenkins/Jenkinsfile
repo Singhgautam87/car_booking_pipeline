@@ -4,7 +4,7 @@ pipeline {
     environment {
         COMPOSE_FILE = "docker-compose.yml"
         SPARK_SUBMIT = "docker exec spark-master /opt/spark/bin/spark-submit"
-        SPARK_PACKAGES = "org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.2,org.postgresql:postgresql:42.5.0,mysql:mysql-connector-java:8.0.33,org.apache.hadoop:hadoop-aws:3.3.4,io.delta:delta-spark_2.12:2.4.0"
+        SPARK_PACKAGES = "org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.2,org.postgresql:postgresql:42.5.0,mysql:mysql-connector-java:8.0.33,org.apache.hadoop:hadoop-aws:3.3.4,io.delta:delta-core_2.12:2.4.0"
         DELTA_CONF = "--conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog"
         S3_CONF = "--conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 --conf spark.hadoop.fs.s3a.access.key=admin --conf spark.hadoop.fs.s3a.secret.key=admin123 --conf spark.hadoop.fs.s3a.path.style.access=true --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem"
     }

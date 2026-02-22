@@ -219,7 +219,7 @@ pipeline {
             echo "✅ Pipeline successfully complete!"
         }
         failure {
-            node {                                             // ✅ node wrap kiya
+            script  {                                             // ✅ node wrap kiya
                 sh '''
                     echo "=== Container Status ==="
                     docker-compose ps

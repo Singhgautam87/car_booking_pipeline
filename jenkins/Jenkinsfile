@@ -192,8 +192,10 @@ pipeline {
                     echo "Installing GE dependencies..."
                     docker exec great_expectations pip install psycopg2-binary sqlalchemy --quiet
                 '''
-                sh 'docker cp great_expectations/jobs/run_ge.py great_expectations:/ge/jobs/run_ge.py'   // ✅ YE ADD KARO
-
+                sh '''
+                    docker exec great_expectations mkdir -p /ge/jobs
+                    docker cp great_expectations/jobs/run_ge.py great_expectations:/ge/jobs/run_ge.py
+                '''
                 sh '''
                     echo "Running GE validation..."
                     docker exec great_expectations python /ge/jobs/run_ge.py

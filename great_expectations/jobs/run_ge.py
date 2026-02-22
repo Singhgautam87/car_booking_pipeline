@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import sys, os
 
-# Fix — config_loader path
 sys.path.insert(0, '/opt/spark/lib')
 
 try:
@@ -20,12 +19,10 @@ except ImportError:
     staging_table = 'customer_booking_staging'
 
 from great_expectations.data_context import FileDataContext
-from great_expectations.core.batch import RuntimeBatchRequest
 
 def run_quality_checks():
     try:
         ge_project_dir = '/ge/great_expectations'
-
         context = FileDataContext(context_root_dir=ge_project_dir)
 
         print("\n📊 Running Data Quality Validation...")
@@ -38,31 +35,28 @@ def run_quality_checks():
         connection_string = f"postgresql+psycopg2://{db_user}:{db_pass}@{db_host}:{db_port}/{db_name}"
 
         datasource_name = "postgres_ds"
+
+        # GE 1.6.3 — Fluent API
         try:
-            context.get_datasource(datasource_name)
+            context.data_sources.get(datasource_name)
         except Exception:
-            context.add_datasource(
+            context.data_sources.add_or_update_sql(
                 name=datasource_name,
-                class_name="Datasource",
-                execution_engine={
-                    "class_name": "SqlAlchemyExecutionEngine",
-                    "connection_string": connection_string
-                },
-                data_connectors={
-                    "default": {
-                        "class_name": "RuntimeDataConnector",
-                        "batch_identifiers": ["default_identifier_name"]
-                    }
-                }
+                connection_string=connection_string
             )
 
-        batch_request = RuntimeBatchRequest(
-            datasource_name=datasource_name,
-            data_connector_name="default",
-            data_asset_name=staging_table,
-            runtime_parameters={"query": f"SELECT * FROM {staging_table}"},
-            batch_identifiers={"default_identifier_name": "default"}
-        )
+        datasource = context.data_sources.get(datasource_name)
+
+        # Table asset add karo
+        try:
+            asset = datasource.get_table_asset(staging_table)
+        except Exception:
+            asset = datasource.add_table_asset(
+                name=staging_table,
+                table_name=staging_table
+            )
+
+        batch_request = asset.build_batch_request()
 
         checkpoint = context.get_checkpoint(name="customer_booking_checkpoint")
         checkpoint_result = checkpoint.run(
@@ -136,3 +130,4 @@ def run_quality_checks():
 
 if __name__ == "__main__":
     sys.exit(run_quality_checks())
+

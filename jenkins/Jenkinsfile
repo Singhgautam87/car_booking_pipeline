@@ -202,7 +202,7 @@ pipeline {
 
         stage('Load MySQL') {
             steps {
-                sh 'docker exec spark-master pip install mysql-connector-python --quiet'
+                sh 'docker exec -u root spark-master pip install mysql-connector-python --quiet'
                 timeout(time: 15, unit: 'MINUTES') {          
                     sh '''
                         echo "Writing to MySQL..."

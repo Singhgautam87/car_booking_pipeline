@@ -7,6 +7,7 @@ pipeline {
         SPARK_PACKAGES = "org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.2,org.postgresql:postgresql:42.5.0,mysql:mysql-connector-java:8.0.33,org.apache.hadoop:hadoop-aws:3.3.4,io.delta:delta-core_2.12:2.4.0"
         DELTA_CONF = "--conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog"
         S3_CONF = "--conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 --conf spark.hadoop.fs.s3a.access.key=admin --conf spark.hadoop.fs.s3a.secret.key=admin123 --conf spark.hadoop.fs.s3a.path.style.access=true --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem"
+        SPARK_MEMORY = "--driver-memory 2g --executor-memory 2g --conf spark.driver.maxResultSize=1g"
     }
 
     stages {
@@ -113,17 +114,16 @@ pipeline {
                 '''
             }
         }
-    
 
         stage('Spark Ingest Stream') {
             steps {
                 sh 'docker exec -u root spark-master mkdir -p /home/spark/.ivy2/cache'
                 sh 'docker exec -u root spark-master chown -R spark:spark /home/spark/.ivy2'
                 retry(3) {
-                    timeout(time: 3, unit: 'MINUTES') {
+                    timeout(time: 15, unit: 'MINUTES') {      // ✅ 3 → 15 fix kiya
                         sh '''
                             echo "Kafka se data ingest, parse, explode aur split..."
-                            $SPARK_SUBMIT --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
+                            $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
                                 /opt/spark-apps/jobs/ingest_stream.py
                             echo "✅ Raw data Delta Lake mein split!"
                         '''
@@ -134,49 +134,55 @@ pipeline {
 
         stage('Transform Data') {
             steps {
-                sh '''
-                    echo "Customer transform..."
-                    $SPARK_SUBMIT --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
-                        /opt/spark-apps/jobs/transform_customer.py
-                    echo "✅ Customer done"
+                timeout(time: 20, unit: 'MINUTES') {          // ✅ naya add kiya
+                    sh '''
+                        echo "Customer transform..."
+                        $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
+                            /opt/spark-apps/jobs/transform_customer.py
+                        echo "✅ Customer done"
 
-                    echo "Booking transform..."
-                    $SPARK_SUBMIT --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
-                        /opt/spark-apps/jobs/transform_booking.py
-                    echo "✅ Booking done"
+                        echo "Booking transform..."
+                        $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
+                            /opt/spark-apps/jobs/transform_booking.py
+                        echo "✅ Booking done"
 
-                    echo "Cars transform..."
-                    $SPARK_SUBMIT --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
-                        /opt/spark-apps/jobs/transform_cars.py
-                    echo "✅ Cars done"
+                        echo "Cars transform..."
+                        $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
+                            /opt/spark-apps/jobs/transform_cars.py
+                        echo "✅ Cars done"
 
-                    echo "Payments transform..."
-                    $SPARK_SUBMIT --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
-                        /opt/spark-apps/jobs/transform_payments.py
-                    echo "✅ Payments done"
-                '''
+                        echo "Payments transform..."
+                        $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
+                            /opt/spark-apps/jobs/transform_payments.py
+                        echo "✅ Payments done"
+                    '''
+                }
             }
         }
 
         stage('Merge Data') {
             steps {
-                sh '''
-                    echo "Merging all data..."
-                    $SPARK_SUBMIT --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
-                        /opt/spark-apps/jobs/merge.py
-                    echo "✅ Data merged!"
-                '''
+                timeout(time: 15, unit: 'MINUTES') {          // ✅ naya add kiya
+                    sh '''
+                        echo "Merging all data..."
+                        $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
+                            /opt/spark-apps/jobs/merge.py
+                        echo "✅ Data merged!"
+                    '''
+                }
             }
         }
 
         stage('Write to PostgreSQL Staging') {
             steps {
-                sh '''
-                    echo "Writing to PostgreSQL staging..."
-                    $SPARK_SUBMIT --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
-                        /opt/spark-apps/jobs/write_to_postgres.py
-                    echo "✅ PostgreSQL staging ready!"
-                '''
+                timeout(time: 15, unit: 'MINUTES') {          // ✅ naya add kiya
+                    sh '''
+                        echo "Writing to PostgreSQL staging..."
+                        $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
+                            /opt/spark-apps/jobs/write_to_postgres.py
+                        echo "✅ PostgreSQL staging ready!"
+                    '''
+                }
             }
         }
 
@@ -196,12 +202,14 @@ pipeline {
 
         stage('Load MySQL') {
             steps {
-                sh '''
-                    echo "Writing to MySQL..."
-                    $SPARK_SUBMIT --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
-                        /opt/spark-apps/jobs/write_to_mysql.py
-                    echo "✅ MySQL load complete!"
-                '''
+                timeout(time: 15, unit: 'MINUTES') {          // ✅ naya add kiya
+                    sh '''
+                        echo "Writing to MySQL..."
+                        $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
+                            /opt/spark-apps/jobs/write_to_mysql.py
+                        echo "✅ MySQL load complete!"
+                    '''
+                }
             }
         }
     }
@@ -211,17 +219,19 @@ pipeline {
             echo "✅ Pipeline successfully complete!"
         }
         failure {
-            sh '''
-                echo "=== Container Status ==="
-                docker-compose ps
-                echo "=== Kafka Logs ==="
-                docker logs kafka --tail 50 || true
-                echo "=== Spark Logs ==="
-                docker logs spark-master --tail 50 || true
-                echo "=== GE Logs ==="
-                docker logs great_expectations --tail 50 || true
-            '''
-            echo "❌ Pipeline failed!"
+            node {                                             // ✅ node wrap kiya
+                sh '''
+                    echo "=== Container Status ==="
+                    docker-compose ps
+                    echo "=== Kafka Logs ==="
+                    docker logs kafka --tail 50 || true
+                    echo "=== Spark Logs ==="
+                    docker logs spark-master --tail 50 || true
+                    echo "=== GE Logs ==="
+                    docker logs great_expectations --tail 50 || true
+                '''
+                echo "❌ Pipeline failed!"
+            }
         }
     }
 }

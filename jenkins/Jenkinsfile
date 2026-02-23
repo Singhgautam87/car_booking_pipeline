@@ -21,8 +21,8 @@ pipeline {
         stage('Cleanup') {
             steps {
                 sh '''
-                    docker-compose down --remove-orphans
-                    docker ps -a | grep -E "postgres|mysql|kafka|zookeeper|spark|minio|kafka-ui|great_expectations" | awk '{print $1}' | xargs -r docker rm -f || true
+                    docker-compose down --remove-orphans -v
+                    docker ps -a | grep -E "postgres|mysql|kafka|zookeeper|spark|minio|kafka-ui|great_expectations" |dashboard" |awk '{print $1}' | xargs -r docker rm -f || true
                 '''
             }
         }
@@ -215,12 +215,25 @@ pipeline {
         }
     }
 
+    stage('Start Dashboard') {
+        steps {
+            sh '''
+                echo "Starting Dashboard..."
+                docker-compose up -d dashboard
+                echo "✅ Dashboard running at http://localhost:8050"
+          
+                '''
+            }
+        }
+    }
+
     post {
         success {
             echo "✅ Pipeline successfully complete!"
+            echo "📊 Dashboard: http://localhost:8050"
         }
         failure {
-            script  {                                             // ✅ node wrap kiya
+            script {
                 sh '''
                     echo "=== Container Status ==="
                     docker-compose ps
@@ -235,4 +248,3 @@ pipeline {
             }
         }
     }
-}

@@ -153,6 +153,20 @@ services:
       retries: 3
     networks:
       - car-booking-network
+  dashboard:
+    image: python:3.10-slim
+    container_name: dashboard
+    ports:
+      - "8050:8050"
+    volumes:
+      - ./dashboard:/app
+    command: >
+      sh -c "pip install dash plotly mysql-connector-python pandas --quiet &&
+            python /app/dashboard.py"
+    depends_on:
+      - mysql
+    networks:
+      - car-booking-network
 
 networks:
   car-booking-network:

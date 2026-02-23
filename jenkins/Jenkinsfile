@@ -22,6 +22,8 @@ pipeline {
             steps {
                 sh '''
                     docker-compose down --remove-orphans -v
+                    docker volume rm car-booking-pipeline_mysql_data || true
+                    docker volume rm car-booking-pipeline_postgres_data || true
                     docker ps -a | grep -E "postgres|mysql|kafka|zookeeper|spark|minio|kafka-ui|great_expectations|dashboard" | awk '{print $1}' | xargs -r docker rm -f || true
                 '''
             }

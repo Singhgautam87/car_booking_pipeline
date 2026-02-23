@@ -22,7 +22,7 @@ pipeline {
             steps {
                 sh '''
                     docker-compose down --remove-orphans -v
-                    docker ps -a | grep -E "postgres|mysql|kafka|zookeeper|spark|minio|kafka-ui|great_expectations" |dashboard" |awk '{print $1}' | xargs -r docker rm -f || true
+                    docker ps -a | grep -E "postgres|mysql|kafka|zookeeper|spark|minio|kafka-ui|great_expectations|dashboard" | awk '{print $1}' | xargs -r docker rm -f || true
                 '''
             }
         }
@@ -120,7 +120,7 @@ pipeline {
                 sh 'docker exec -u root spark-master mkdir -p /home/spark/.ivy2/cache'
                 sh 'docker exec -u root spark-master chown -R spark:spark /home/spark/.ivy2'
                 retry(3) {
-                    timeout(time: 15, unit: 'MINUTES') {      // ✅ 3 → 15 fix kiya
+                    timeout(time: 15, unit: 'MINUTES') {
                         sh '''
                             echo "Kafka se data ingest, parse, explode aur split..."
                             $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
@@ -134,7 +134,7 @@ pipeline {
 
         stage('Transform Data') {
             steps {
-                timeout(time: 20, unit: 'MINUTES') {          // ✅ naya add kiya
+                timeout(time: 20, unit: 'MINUTES') {
                     sh '''
                         echo "Customer transform..."
                         $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
@@ -162,7 +162,7 @@ pipeline {
 
         stage('Merge Data') {
             steps {
-                timeout(time: 15, unit: 'MINUTES') {          // ✅ naya add kiya
+                timeout(time: 15, unit: 'MINUTES') {
                     sh '''
                         echo "Merging all data..."
                         $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
@@ -175,7 +175,7 @@ pipeline {
 
         stage('Write to PostgreSQL Staging') {
             steps {
-                timeout(time: 15, unit: 'MINUTES') {          // ✅ naya add kiya
+                timeout(time: 15, unit: 'MINUTES') {
                     sh '''
                         echo "Writing to PostgreSQL staging..."
                         $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
@@ -203,7 +203,7 @@ pipeline {
         stage('Load MySQL') {
             steps {
                 sh 'docker exec -u root spark-master pip install mysql-connector-python --quiet'
-                timeout(time: 15, unit: 'MINUTES') {          
+                timeout(time: 15, unit: 'MINUTES') {
                     sh '''
                         echo "Writing to MySQL..."
                         $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
@@ -213,18 +213,17 @@ pipeline {
                 }
             }
         }
-    }
 
-    stage('Start Dashboard') {
-        steps {
-            sh '''
-                echo "Starting Dashboard..."
-                docker-compose up -d dashboard
-                echo "✅ Dashboard running at http://localhost:8050"
-          
+        stage('Start Dashboard') {
+            steps {
+                sh '''
+                    echo "Starting Dashboard..."
+                    docker-compose up -d dashboard
+                    echo "✅ Dashboard running at http://localhost:8050"
                 '''
             }
         }
+
     }
 
     post {
@@ -248,3 +247,4 @@ pipeline {
             }
         }
     }
+}

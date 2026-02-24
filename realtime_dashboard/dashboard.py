@@ -1,28 +1,26 @@
+import os
+
 import dash
+from sqlalchemy import create_engine
 from dash import dcc, html, Input, Output
 import plotly.express as px
 import plotly.graph_objects as go
-import mysql.connector
 import pandas as pd
 
 # ============ MYSQL CONNECTION ============
 def get_data():
-    conn = mysql.connector.connect(
-        host="mysql",
-        user="admin",
-        password="admin",
-        database="booking"
-    )
-    booking_df = pd.read_sql("SELECT * FROM customer_booking_final", conn)
-    validation_df = pd.read_sql("SELECT * FROM validation_results", conn)
-    conn.close()
+    # Docker mein "mysql", locally "localhost"
+    host = os.getenv("MYSQL_HOST", "localhost")
+    engine = create_engine(f"mysql+mysqlconnector://admin:admin@{host}:3306/booking")
+    booking_df = pd.read_sql("SELECT * FROM customer_booking_final", engine)
+    validation_df = pd.read_sql("SELECT * FROM validation_results", engine)
+    engine.dispose()
     return booking_df, validation_df
-
-booking_df, validation_df = get_data()
-
 # ============ APP ============
 app = dash.Dash(__name__)
 app.title = "Car Booking Pipeline Dashboard"
+
+booking_df, validation_df = get_data()
 
 # ============ LAYOUT ============
 app.layout = html.Div(
@@ -37,8 +35,6 @@ app.layout = html.Div(
                         style={"color": "#e94560", "fontSize": "36px"}),
                 html.P("Real-time Data Engineering Pipeline Monitor",
                        style={"color": "#a8a8b3", "fontSize": "16px"}),
-
-                # Refresh button
                 html.Button("🔄 Refresh Data", id="refresh-btn",
                             style={"backgroundColor": "#e94560", "color": "white",
                                    "border": "none", "padding": "10px 20px",
@@ -51,7 +47,6 @@ app.layout = html.Div(
         html.Div(
             style={"display": "flex", "justifyContent": "space-around", "marginBottom": "30px"},
             children=[
-                # Total Bookings
                 html.Div(
                     style={"backgroundColor": "#16213e", "padding": "20px", "borderRadius": "10px",
                            "textAlign": "center", "width": "18%", "border": "1px solid #e94560"},
@@ -61,7 +56,6 @@ app.layout = html.Div(
                         html.P("Total Bookings", style={"color": "#a8a8b3"})
                     ]
                 ),
-                # Total Customers
                 html.Div(
                     style={"backgroundColor": "#16213e", "padding": "20px", "borderRadius": "10px",
                            "textAlign": "center", "width": "18%", "border": "1px solid #0f3460"},
@@ -71,7 +65,6 @@ app.layout = html.Div(
                         html.P("Total Customers", style={"color": "#a8a8b3"})
                     ]
                 ),
-                # Total Revenue
                 html.Div(
                     style={"backgroundColor": "#16213e", "padding": "20px", "borderRadius": "10px",
                            "textAlign": "center", "width": "18%", "border": "1px solid #0f3460"},
@@ -81,7 +74,6 @@ app.layout = html.Div(
                         html.P("Total Revenue", style={"color": "#a8a8b3"})
                     ]
                 ),
-                # Total Cars
                 html.Div(
                     style={"backgroundColor": "#16213e", "padding": "20px", "borderRadius": "10px",
                            "textAlign": "center", "width": "18%", "border": "1px solid #0f3460"},
@@ -91,7 +83,6 @@ app.layout = html.Div(
                         html.P("Total Cars", style={"color": "#a8a8b3"})
                     ]
                 ),
-                # GE Success Rate
                 html.Div(
                     style={"backgroundColor": "#16213e", "padding": "20px", "borderRadius": "10px",
                            "textAlign": "center", "width": "18%", "border": "1px solid #0f3460"},
@@ -109,12 +100,8 @@ app.layout = html.Div(
         html.Div(
             style={"display": "flex", "gap": "20px", "marginBottom": "20px"},
             children=[
-                html.Div(style={"width": "50%"}, children=[
-                    dcc.Graph(id="bookings-per-day")
-                ]),
-                html.Div(style={"width": "50%"}, children=[
-                    dcc.Graph(id="revenue-per-day")
-                ])
+                html.Div(style={"width": "50%"}, children=[dcc.Graph(id="bookings-per-day")]),
+                html.Div(style={"width": "50%"}, children=[dcc.Graph(id="revenue-per-day")])
             ]
         ),
 
@@ -122,12 +109,8 @@ app.layout = html.Div(
         html.Div(
             style={"display": "flex", "gap": "20px", "marginBottom": "20px"},
             children=[
-                html.Div(style={"width": "50%"}, children=[
-                    dcc.Graph(id="popular-cars")
-                ]),
-                html.Div(style={"width": "50%"}, children=[
-                    dcc.Graph(id="payment-methods")
-                ])
+                html.Div(style={"width": "50%"}, children=[dcc.Graph(id="popular-cars")]),
+                html.Div(style={"width": "50%"}, children=[dcc.Graph(id="payment-methods")])
             ]
         ),
 
@@ -135,12 +118,8 @@ app.layout = html.Div(
         html.Div(
             style={"display": "flex", "gap": "20px", "marginBottom": "20px"},
             children=[
-                html.Div(style={"width": "50%"}, children=[
-                    dcc.Graph(id="loyalty-tiers")
-                ]),
-                html.Div(style={"width": "50%"}, children=[
-                    dcc.Graph(id="insurance-coverage")
-                ])
+                html.Div(style={"width": "50%"}, children=[dcc.Graph(id="loyalty-tiers")]),
+                html.Div(style={"width": "50%"}, children=[dcc.Graph(id="insurance-coverage")])
             ]
         ),
 
@@ -148,16 +127,11 @@ app.layout = html.Div(
         html.Div(
             style={"display": "flex", "gap": "20px", "marginBottom": "20px"},
             children=[
-                html.Div(style={"width": "50%"}, children=[
-                    dcc.Graph(id="pickup-locations")
-                ]),
-                html.Div(style={"width": "50%"}, children=[
-                    dcc.Graph(id="ge-validation")
-                ])
+                html.Div(style={"width": "50%"}, children=[dcc.Graph(id="pickup-locations")]),
+                html.Div(style={"width": "50%"}, children=[dcc.Graph(id="ge-validation")])
             ]
         ),
 
-        # Hidden div for refresh
         dcc.Store(id="store-data")
     ]
 )
@@ -259,13 +233,13 @@ def update_charts(n_clicks):
     else:
         fig8 = go.Figure()
         fig8.add_annotation(text="No validation data yet",
-                           xref="paper", yref="paper",
-                           x=0.5, y=0.5, showarrow=False,
-                           font={"color": "white", "size": 20})
+                            xref="paper", yref="paper",
+                            x=0.5, y=0.5, showarrow=False,
+                            font={"color": "white", "size": 20})
     fig8.update_layout(**CHART_STYLE, title="✅ GE Validation Success Rate History")
 
     return fig1, fig2, fig3, fig4, fig5, fig6, fig7, fig8
 
 
 if __name__ == "__main__":
-    app.run_server(host="0.0.0.0", port=8050, debug=False)
+    app.run(host="0.0.0.0", port=8050, debug=False)

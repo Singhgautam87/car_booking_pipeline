@@ -159,7 +159,9 @@ services:
     ports:
       - "8050:8050"
     volumes:
-      - ./dashboard:/app
+      - ./realtime_dashboard:/app
+    environment:
+      - MYSQL_HOST=mysql
     command: >
       sh -c "pip install dash plotly mysql-connector-python pandas --quiet &&
             python /app/dashboard.py"

@@ -21,10 +21,28 @@ pipeline {
         stage('Cleanup') {
             steps {
                 sh '''
-                    docker-compose down --remove-orphans -v
+                    echo "=== Full Cleanup ==="
+
+                    # ✅ Containers stop aur remove karo
+                    docker-compose down --remove-orphans -v || true
+
+                    # ✅ Volumes delete karo
+                    docker volume rm car-booking-pipeline_mysql_data || true
+                    docker volume rm car-booking-pipeline_postgres_data || true
                     docker volume rm car-data-pipeline_mysql_data || true
                     docker volume rm car-data-pipeline_postgres_data || true
+
+                    # ✅ Purane containers remove karo
                     docker ps -a | grep -E "postgres|mysql|kafka|zookeeper|spark|minio|kafka-ui|great_expectations|dashboard" | awk '{print $1}' | xargs -r docker rm -f || true
+
+                    # ✅ Dangling images clean karo
+                    docker image prune -f || true
+
+                    # ✅ Temp files clean karo
+                    rm -rf /tmp/ge_* || true
+                    rm -rf /tmp/spark_* || true
+
+                    echo "✅ Cleanup complete!"
                 '''
             }
         }
@@ -73,6 +91,7 @@ pipeline {
                         sleep 2
                     done
 
+                    # ✅ Fresh tables banao
                     echo "Running mysql.sql..."
                     docker exec -i mysql mysql -u admin -padmin booking < sql/mysql.sql
 
@@ -113,7 +132,9 @@ pipeline {
         stage('Setup MinIO Buckets') {
             steps {
                 sh '''
+                    # ✅ Fresh MinIO buckets
                     docker exec minio sh -c "
+                        rm -rf /data/delta &&
                         mkdir -p /data/delta/raw &&
                         mkdir -p /data/delta/transformed &&
                         mkdir -p /data/delta/curated
@@ -197,10 +218,25 @@ pipeline {
         stage('Great Expectations Validation') {
             steps {
                 sh '''
+                    echo "=== GE Setup ==="
+
+                    # ✅ Fresh directories banao
                     docker exec great_expectations mkdir -p /ge/jobs
+                    docker exec great_expectations mkdir -p /ge/great_expectations/expectations
+                    docker exec great_expectations mkdir -p /ge/great_expectations/uncommitted/validations
+
+                    # ✅ Fresh files copy karo
                     docker cp great_expectations/jobs/run_ge.py great_expectations:/ge/jobs/run_ge.py
-                '''
-                sh '''
+                    docker cp great_expectations/great_expectations/expectations/customer_booking_suite.json great_expectations:/ge/great_expectations/expectations/customer_booking_suite.json
+
+                    # ✅ Purana validation data delete karo
+                    docker exec mysql mysql -u admin -padmin booking -e "DELETE FROM validation_results;"
+                    docker exec mysql mysql -u admin -padmin booking -e "DELETE FROM validation_expectation_details;"
+                    docker exec mysql mysql -u admin -padmin booking -e "DELETE FROM validation_failed_records;"
+
+                    # ✅ Dependencies install karo
+                    docker exec great_expectations pip install mysql-connector-python psycopg2-binary sqlalchemy --quiet
+
                     echo "Running GE validation..."
                     docker exec great_expectations python /ge/jobs/run_ge.py
                     echo "✅ Validation complete!"
@@ -227,11 +263,11 @@ pipeline {
                 sh '''
                     echo "Starting Dashboard..."
                     docker-compose up -d dashboard
+                    sleep 10
                     echo "✅ Dashboard running at http://localhost:8050"
                 '''
             }
         }
-
     }
 
     post {
@@ -240,19 +276,21 @@ pipeline {
             echo "📊 Dashboard: http://localhost:8050"
         }
         failure {
-            script {
-                sh '''
-                    echo "=== Container Status ==="
-                    docker-compose ps
-                    echo "=== Kafka Logs ==="
-                    docker logs kafka --tail 50 || true
-                    echo "=== Spark Logs ==="
-                    docker logs spark-master --tail 50 || true
-                    echo "=== GE Logs ==="
-                    docker logs great_expectations --tail 50 || true
-                '''
-                echo "❌ Pipeline failed!"
-            }
+            sh '''
+                echo "=== Container Status ==="
+                docker-compose ps || true
+                echo "=== Kafka Logs ==="
+                docker logs kafka --tail 50 || true
+                echo "=== Spark Logs ==="
+                docker logs spark-master --tail 50 || true
+                echo "=== GE Logs ==="
+                docker logs great_expectations --tail 50 || true
+                echo "=== MySQL Logs ==="
+                docker logs mysql --tail 30 || true
+                echo "=== PostgreSQL Logs ==="
+                docker logs postgres --tail 30 || true
+            '''
+            echo "❌ Pipeline failed!"
         }
     }
 }

@@ -12,6 +12,7 @@ services:
     volumes:
       - jenkins_home:/var/jenkins_home
       - /var/run/docker.sock:/var/run/docker.sock  # Docker socket — pipeline ke liye zaroori
+    user: root 
     environment:
       - DOCKER_HOST=unix:///var/run/docker.sock
     networks:

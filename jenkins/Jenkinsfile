@@ -25,13 +25,12 @@ pipeline {
                 sh '''
                     echo "=== Full Cleanup ==="
 
-                    # ✅ Jenkins ko CHOD KAR baaki sab containers stop + remove karo
-                    docker-compose -p ${COMPOSE_PROJECT} stop postgres mysql kafka zookeeper minio kafka-ui spark great_expectations dashboard || true
-                    docker-compose -p ${COMPOSE_PROJECT} rm -f postgres mysql kafka zookeeper minio kafka-ui spark great_expectations dashboard || true
+                    # ✅ Seedha naam se force remove karo — Jenkins ko CHOD KAR
+                    docker rm -f postgres mysql kafka zookeeper minio kafka-ui spark-master great_expectations dashboard || true
 
                     # ✅ Volumes delete (fresh data ke liye)
-                    docker volume rm ${COMPOSE_PROJECT}_mysql_data || true
-                    docker volume rm ${COMPOSE_PROJECT}_postgres_data || true
+                    docker volume rm car-booking-pipeline_mysql_data || true
+                    docker volume rm car-booking-pipeline_postgres_data || true
 
                     # ✅ Dangling images clean
                     docker image prune -f || true

@@ -65,6 +65,11 @@ pipeline {
                     done
 
                     docker-compose -p ${COMPOSE_PROJECT} ps
+
+                    # ✅ Spark files Jenkins workspace se spark container mein copy karo
+                    # Volume mount Windows Docker pe kaam nahi karta — docker cp use karo
+                    docker cp spark/. spark-master:/opt/spark-apps/
+                    echo "✅ Spark files copied to spark-master!"
                 '''
             }
         }

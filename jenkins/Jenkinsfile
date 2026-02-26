@@ -25,13 +25,11 @@ pipeline {
                 sh '''
                     echo "=== Full Cleanup ==="
 
-                    # ✅ Compose down — sab containers + volumes
-                    docker-compose -p ${COMPOSE_PROJECT} down --remove-orphans -v || true
+                    # ✅ Jenkins ko CHOD KAR baaki sab containers stop + remove karo
+                    docker-compose -p ${COMPOSE_PROJECT} stop postgres mysql kafka zookeeper minio kafka-ui spark great_expectations dashboard || true
+                    docker-compose -p ${COMPOSE_PROJECT} rm -f postgres mysql kafka zookeeper minio kafka-ui spark great_expectations dashboard || true
 
-                    # ✅ Purane containers force remove
-                    docker ps -a | grep -E "postgres|mysql|kafka|zookeeper|spark-master|minio|kafka-ui|great_expectations|dashboard" | awk '{print $1}' | xargs -r docker rm -f || true
-
-                    # ✅ Volumes delete
+                    # ✅ Volumes delete (fresh data ke liye)
                     docker volume rm ${COMPOSE_PROJECT}_mysql_data || true
                     docker volume rm ${COMPOSE_PROJECT}_postgres_data || true
 
@@ -41,7 +39,7 @@ pipeline {
                     # ✅ Temp files clean
                     rm -rf /tmp/ge_* /tmp/spark_* /tmp/producer.py /tmp/car_booking.json || true
 
-                    echo "✅ Cleanup complete!"
+                    echo "✅ Cleanup complete! Jenkins is still running 😎"
                 '''
             }
         }
@@ -93,7 +91,6 @@ pipeline {
                         sleep 2
                     done
 
-                    # ✅ Fresh tables — init.sql volume nahi hai toh manually run karo
                     echo "Running mysql.sql..."
                     docker exec -i mysql mysql -u admin -padmin booking < sql/mysql.sql
 
@@ -217,17 +214,14 @@ pipeline {
                 sh '''
                     echo "=== Data Validation Setup ==="
 
-                    # ✅ Fresh directories
                     docker exec great_expectations mkdir -p /ge/jobs
                     docker exec great_expectations mkdir -p /ge/great_expectations/expectations
                     docker exec great_expectations mkdir -p /ge/great_expectations/uncommitted/validations
 
-                    # ✅ Fresh files copy
                     docker cp great_expectations/jobs/run_ge.py great_expectations:/ge/jobs/run_ge.py
                     docker cp great_expectations/great_expectations/expectations/customer_booking_suite.json \
                         great_expectations:/ge/great_expectations/expectations/customer_booking_suite.json
 
-                    # ✅ Purana validation data delete
                     docker exec mysql mysql -u admin -padmin booking -e "
                         DELETE FROM validation_results;
                         DELETE FROM validation_expectation_details;
@@ -257,15 +251,12 @@ pipeline {
         stage('Start Dashboard') {
             steps {
                 sh '''
-                    # ✅ Purana dashboard remove karo
                     docker rm -f dashboard || true
 
-                    # ✅ Same network mein fresh start
                     docker-compose -p ${COMPOSE_PROJECT} up -d dashboard
 
                     sleep 15
 
-                    # ✅ Dashboard health check
                     for i in 1 2 3 4 5; do
                         if curl -s http://localhost:8050 >/dev/null 2>&1; then
                             echo "✅ Dashboard running at http://localhost:8050"

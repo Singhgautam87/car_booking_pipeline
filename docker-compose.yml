@@ -79,9 +79,8 @@ services:
     depends_on:
       - kafka
     volumes:
-      - ./spark:/opt/spark-apps
-      - ./config:/opt/config
       - ./reports:/opt/reports
+      # ✅ spark + config → Jenkins docker cp se aate hain
     command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
     networks:
       - car-booking-network
@@ -139,9 +138,9 @@ services:
     restart: "no"
     volumes:
       - ./great_expectations:/ge
-      - ./config:/opt/config
       - ./reports:/opt/reports
       - ./spark/lib:/opt/spark/lib
+      # ✅ config → Jenkins docker cp se aata hai
     depends_on:
       - postgres
       - mysql

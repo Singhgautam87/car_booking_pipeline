@@ -24,20 +24,11 @@ pipeline {
             steps {
                 sh '''
                     echo "=== Full Cleanup ==="
-
-                    # ✅ Seedha naam se force remove karo — Jenkins ko CHOD KAR
                     docker rm -f postgres mysql kafka zookeeper minio kafka-ui spark-master great_expectations dashboard || true
-
-                    # ✅ Volumes delete (fresh data ke liye)
                     docker volume rm car-booking-pipeline_mysql_data || true
                     docker volume rm car-booking-pipeline_postgres_data || true
-
-                    # ✅ Dangling images clean
                     docker image prune -f || true
-
-                    # ✅ Temp files clean
                     rm -rf /tmp/ge_* /tmp/spark_* /tmp/producer.py /tmp/car_booking.json || true
-
                     echo "✅ Cleanup complete! Jenkins is still running 😎"
                 '''
             }
@@ -66,10 +57,22 @@ pipeline {
 
                     docker-compose -p ${COMPOSE_PROJECT} ps
 
-                    # ✅ Spark files Jenkins workspace se spark container mein copy karo
-                    # Volume mount Windows Docker pe kaam nahi karta — docker cp use karo
+                    # ✅ Spark files copy karo
                     docker cp spark/. spark-master:/opt/spark-apps/
                     echo "✅ Spark files copied to spark-master!"
+
+                    # ✅ Config copy karo spark + GE dono mein
+                    docker exec spark-master mkdir -p /opt/config
+                    docker cp config/config.json spark-master:/opt/config/config.json
+                    echo "✅ Config copied to spark-master!"
+
+                    docker exec great_expectations mkdir -p /opt/config
+                    docker cp config/config.json great_expectations:/opt/config/config.json
+                    echo "✅ Config copied to great_expectations!"
+
+                    # ✅ Verify
+                    echo "--- Config verify ---"
+                    docker exec spark-master cat /opt/config/config.json
                 '''
             }
         }

@@ -3,6 +3,7 @@ pipeline {
 
     environment {
         COMPOSE_FILE = "docker-compose.yml"
+        COMPOSE_PROJECT = "car-booking-pipeline"
         SPARK_SUBMIT = "docker exec spark-master /opt/spark/bin/spark-submit"
         SPARK_PACKAGES = "org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.2,org.postgresql:postgresql:42.5.0,mysql:mysql-connector-java:8.0.33,org.apache.hadoop:hadoop-aws:3.3.4,io.delta:delta-core_2.12:2.4.0"
         DELTA_CONF = "--conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog"
@@ -11,6 +12,7 @@ pipeline {
     }
 
     stages {
+
         stage('Checkout Code') {
             steps {
                 checkout scm
@@ -23,24 +25,21 @@ pipeline {
                 sh '''
                     echo "=== Full Cleanup ==="
 
-                    # ✅ Containers stop aur remove karo
-                    docker-compose down --remove-orphans -v || true
+                    # ✅ Compose down — sab containers + volumes
+                    docker-compose -p ${COMPOSE_PROJECT} down --remove-orphans -v || true
 
-                    # ✅ Volumes delete karo
-                    docker volume rm car-booking-pipeline_mysql_data || true
-                    docker volume rm car-booking-pipeline_postgres_data || true
-                    docker volume rm car-data-pipeline_mysql_data || true
-                    docker volume rm car-data-pipeline_postgres_data || true
+                    # ✅ Purane containers force remove
+                    docker ps -a | grep -E "postgres|mysql|kafka|zookeeper|spark-master|minio|kafka-ui|great_expectations|dashboard" | awk '{print $1}' | xargs -r docker rm -f || true
 
-                    # ✅ Purane containers remove karo
-                    docker ps -a | grep -E "postgres|mysql|kafka|zookeeper|spark|minio|kafka-ui|great_expectations|dashboard" | awk '{print $1}' | xargs -r docker rm -f || true
+                    # ✅ Volumes delete
+                    docker volume rm ${COMPOSE_PROJECT}_mysql_data || true
+                    docker volume rm ${COMPOSE_PROJECT}_postgres_data || true
 
-                    # ✅ Dangling images clean karo
+                    # ✅ Dangling images clean
                     docker image prune -f || true
 
-                    # ✅ Temp files clean karo
-                    rm -rf /tmp/ge_* || true
-                    rm -rf /tmp/spark_* || true
+                    # ✅ Temp files clean
+                    rm -rf /tmp/ge_* /tmp/spark_* /tmp/producer.py /tmp/car_booking.json || true
 
                     echo "✅ Cleanup complete!"
                 '''
@@ -50,22 +49,25 @@ pipeline {
         stage('Start Containers') {
             steps {
                 sh '''
-                    docker-compose up -d postgres mysql kafka zookeeper minio kafka-ui spark great_expectations
+                    docker-compose -p ${COMPOSE_PROJECT} up -d \
+                        postgres mysql kafka zookeeper minio kafka-ui spark great_expectations
+
                     echo "Waiting for Kafka to initialize (60 seconds)..."
                     sleep 60
-                    echo "=== Kafka Logs (Last 30 lines) ==="
-                    docker logs kafka --tail 30 || echo "Could not fetch Kafka logs"
+
+                    echo "=== Kafka Logs ==="
+                    docker logs kafka --tail 30 || true
+
                     for i in 1 2 3 4 5; do
-                        echo "Checking Kafka readiness (attempt $i/5)..."
+                        echo "Kafka readiness check $i/5..."
                         if docker exec kafka kafka-broker-api-versions --bootstrap-server localhost:9092 2>/dev/null; then
-                            echo "Kafka is ready!"
+                            echo "✅ Kafka ready!"
                             break
-                        else
-                            echo "Kafka not ready, waiting 10 more seconds..."
-                            sleep 10
                         fi
+                        sleep 10
                     done
-                    docker-compose ps
+
+                    docker-compose -p ${COMPOSE_PROJECT} ps
                 '''
             }
         }
@@ -76,7 +78,7 @@ pipeline {
                     echo "Waiting for PostgreSQL..."
                     for i in $(seq 1 30); do
                         if docker exec postgres pg_isready -U admin -d booking >/dev/null 2>&1; then
-                            echo "PostgreSQL ready!"
+                            echo "✅ PostgreSQL ready!"
                             break
                         fi
                         sleep 2
@@ -85,28 +87,28 @@ pipeline {
                     echo "Waiting for MySQL..."
                     for i in $(seq 1 30); do
                         if docker exec mysql mysqladmin ping -u admin -padmin >/dev/null 2>&1; then
-                            echo "MySQL ready!"
+                            echo "✅ MySQL ready!"
                             break
                         fi
                         sleep 2
                     done
 
-                    # ✅ Fresh tables banao
+                    # ✅ Fresh tables — init.sql volume nahi hai toh manually run karo
                     echo "Running mysql.sql..."
                     docker exec -i mysql mysql -u admin -padmin booking < sql/mysql.sql
 
                     echo "Running postgres.sql..."
                     docker exec -i postgres psql -U admin -d booking < sql/postgres.sql
 
-                    echo "✅ All databases and tables ready!"
+                    echo "✅ All databases ready!"
                 '''
             }
         }
 
         stage('Kafka Producer') {
             steps {
-                sh 'sleep 5'
                 sh '''
+                    sleep 5
                     for i in 1 2 3 4 5; do
                         echo "Creating Kafka topic (attempt $i/5)..."
                         if docker exec kafka kafka-topics --create --if-not-exists \
@@ -114,25 +116,27 @@ pipeline {
                             --bootstrap-server localhost:9092 \
                             --partitions 3 \
                             --replication-factor 1 2>/dev/null; then
-                            echo "Topic created!"
+                            echo "✅ Topic created!"
                             break
                         fi
                         sleep 5
                     done
+
+                    docker exec great_expectations pip install kafka-python --quiet
+
+                    docker cp kafka/data/car_booking.json great_expectations:/tmp/car_booking.json
+                    docker cp kafka/producer.py great_expectations:/tmp/producer.py
+                    docker exec great_expectations python /tmp/producer.py
+
+                    sleep 60
+                    docker exec kafka kafka-topics --describe --topic car-bookings --bootstrap-server localhost:9092
                 '''
-                sh 'docker exec great_expectations pip install kafka-python --quiet'
-                sh 'docker cp kafka/data/car_booking.json great_expectations:/tmp/car_booking.json'
-                sh 'docker cp kafka/producer.py great_expectations:/tmp/producer.py'
-                sh 'docker exec great_expectations python /tmp/producer.py'
-                sh 'sleep 60'
-                sh 'docker exec kafka kafka-topics --describe --topic car-bookings --bootstrap-server localhost:9092'
             }
         }
 
         stage('Setup MinIO Buckets') {
             steps {
                 sh '''
-                    # ✅ Fresh MinIO buckets
                     docker exec minio sh -c "
                         rm -rf /data/delta &&
                         mkdir -p /data/delta/raw &&
@@ -151,10 +155,9 @@ pipeline {
                 retry(3) {
                     timeout(time: 15, unit: 'MINUTES') {
                         sh '''
-                            echo "Kafka se data ingest, parse, explode aur split..."
                             $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
                                 /opt/spark-apps/jobs/ingest_stream.py
-                            echo "✅ Raw data Delta Lake mein split!"
+                            echo "✅ Raw data Delta Lake mein!"
                         '''
                     }
                 }
@@ -165,22 +168,18 @@ pipeline {
             steps {
                 timeout(time: 20, unit: 'MINUTES') {
                     sh '''
-                        echo "Customer transform..."
                         $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
                             /opt/spark-apps/jobs/transform_customer.py
                         echo "✅ Customer done"
 
-                        echo "Booking transform..."
                         $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
                             /opt/spark-apps/jobs/transform_booking.py
                         echo "✅ Booking done"
 
-                        echo "Cars transform..."
                         $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
                             /opt/spark-apps/jobs/transform_cars.py
                         echo "✅ Cars done"
 
-                        echo "Payments transform..."
                         $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
                             /opt/spark-apps/jobs/transform_payments.py
                         echo "✅ Payments done"
@@ -193,7 +192,6 @@ pipeline {
             steps {
                 timeout(time: 15, unit: 'MINUTES') {
                     sh '''
-                        echo "Merging all data..."
                         $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
                             /opt/spark-apps/jobs/merge.py
                         echo "✅ Data merged!"
@@ -206,7 +204,6 @@ pipeline {
             steps {
                 timeout(time: 15, unit: 'MINUTES') {
                     sh '''
-                        echo "Writing to PostgreSQL staging..."
                         $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
                             /opt/spark-apps/jobs/write_to_postgres.py
                         echo "✅ PostgreSQL staging ready!"
@@ -215,29 +212,29 @@ pipeline {
             }
         }
 
-        stage('Great Expectations Validation') {
+        stage('Data Validation') {
             steps {
                 sh '''
-                    echo "=== GE Setup ==="
+                    echo "=== Data Validation Setup ==="
 
-                    # ✅ Fresh directories banao
+                    # ✅ Fresh directories
                     docker exec great_expectations mkdir -p /ge/jobs
                     docker exec great_expectations mkdir -p /ge/great_expectations/expectations
                     docker exec great_expectations mkdir -p /ge/great_expectations/uncommitted/validations
 
-                    # ✅ Fresh files copy karo
+                    # ✅ Fresh files copy
                     docker cp great_expectations/jobs/run_ge.py great_expectations:/ge/jobs/run_ge.py
-                    docker cp great_expectations/great_expectations/expectations/customer_booking_suite.json great_expectations:/ge/great_expectations/expectations/customer_booking_suite.json
+                    docker cp great_expectations/great_expectations/expectations/customer_booking_suite.json \
+                        great_expectations:/ge/great_expectations/expectations/customer_booking_suite.json
 
-                    # ✅ Purana validation data delete karo
-                    docker exec mysql mysql -u admin -padmin booking -e "DELETE FROM validation_results;"
-                    docker exec mysql mysql -u admin -padmin booking -e "DELETE FROM validation_expectation_details;"
-                    docker exec mysql mysql -u admin -padmin booking -e "DELETE FROM validation_failed_records;"
+                    # ✅ Purana validation data delete
+                    docker exec mysql mysql -u admin -padmin booking -e "
+                        DELETE FROM validation_results;
+                        DELETE FROM validation_expectation_details;
+                        DELETE FROM validation_failed_records;
+                    "
 
-                    # ✅ Dependencies install karo
-                    docker exec great_expectations pip install mysql-connector-python psycopg2-binary sqlalchemy --quiet
-
-                    echo "Running GE validation..."
+                    echo "Running validation..."
                     docker exec great_expectations python /ge/jobs/run_ge.py
                     echo "✅ Validation complete!"
                 '''
@@ -249,7 +246,6 @@ pipeline {
                 sh 'docker exec -u root spark-master pip install mysql-connector-python --quiet'
                 timeout(time: 15, unit: 'MINUTES') {
                     sh '''
-                        echo "Writing to MySQL..."
                         $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
                             /opt/spark-apps/jobs/write_to_mysql.py
                         echo "✅ MySQL load complete!"
@@ -261,10 +257,23 @@ pipeline {
         stage('Start Dashboard') {
             steps {
                 sh '''
-                    echo "Starting Dashboard..."
-                    docker-compose up -d dashboard
-                    sleep 10
-                    echo "✅ Dashboard running at http://localhost:8050"
+                    # ✅ Purana dashboard remove karo
+                    docker rm -f dashboard || true
+
+                    # ✅ Same network mein fresh start
+                    docker-compose -p ${COMPOSE_PROJECT} up -d dashboard
+
+                    sleep 15
+
+                    # ✅ Dashboard health check
+                    for i in 1 2 3 4 5; do
+                        if curl -s http://localhost:8050 >/dev/null 2>&1; then
+                            echo "✅ Dashboard running at http://localhost:8050"
+                            break
+                        fi
+                        echo "Waiting for dashboard... $i/5"
+                        sleep 10
+                    done
                 '''
             }
         }
@@ -272,23 +281,28 @@ pipeline {
 
     post {
         success {
-            echo "✅ Pipeline successfully complete!"
+            echo "✅ Pipeline complete!"
             echo "📊 Dashboard: http://localhost:8050"
+            echo "📋 Kafka UI: http://localhost:8081"
+            echo "🗄️ MinIO: http://localhost:9001"
+            echo "⚡ Spark UI: http://localhost:8082"
         }
         failure {
             sh '''
                 echo "=== Container Status ==="
-                docker-compose ps || true
+                docker-compose -p ${COMPOSE_PROJECT} ps || true
                 echo "=== Kafka Logs ==="
                 docker logs kafka --tail 50 || true
                 echo "=== Spark Logs ==="
                 docker logs spark-master --tail 50 || true
-                echo "=== GE Logs ==="
+                echo "=== Validation Logs ==="
                 docker logs great_expectations --tail 50 || true
                 echo "=== MySQL Logs ==="
                 docker logs mysql --tail 30 || true
                 echo "=== PostgreSQL Logs ==="
                 docker logs postgres --tail 30 || true
+                echo "=== Dashboard Logs ==="
+                docker logs dashboard --tail 30 || true
             '''
             echo "❌ Pipeline failed!"
         }

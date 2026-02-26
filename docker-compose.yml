@@ -65,9 +65,9 @@ services:
     depends_on:
       - kafka
     volumes:
-      - C:/Users/gautam/car-booking-pipeline/spark:/opt/spark-apps
-      - C:/Users/gautam/car-booking-pipeline/config:/opt/config
-      - C:/Users/gautam/car-booking-pipeline/reports:/opt/reports
+      - ./spark:/opt/spark-apps
+      - ./config:/opt/config
+      - ./reports:/opt/reports
     command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
     networks:
       - car-booking-network
@@ -100,7 +100,6 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./sql/postgres.sql:/docker-entrypoint-initdb.d/init.sql
     networks:
       - car-booking-network
 
@@ -117,34 +116,21 @@ services:
       - "3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
-      - ./sql/mysql.sql:/docker-entrypoint-initdb.d/init.sql
     networks:
       - car-booking-network
 
-  #jenkins:
-    #image: jenkins/jenkins:lts
-    #container_name: jenkins
-    #user: root
-    #restart: unless-stopped
-    #  - "8080:8080"
-    #  - "50000:50000"
-    #volumes:
-    #  - jenkins_home:/var/jenkins_home
-    #  - /var/run/docker.sock:/var/run/docker.sock
-    #networks:
-    #  - car-booking-network
-  
   great_expectations:
     build: ./great_expectations
     container_name: great_expectations
-    restart: unless-stopped
+    restart: "no"
     volumes:
       - ./great_expectations:/ge
-      - C:/Users/gautam/car-booking-pipeline/config:/opt/config
-      - C:/Users/gautam/car-booking-pipeline/reports:/opt/reports
+      - ./config:/opt/config
+      - ./reports:/opt/reports
       - ./spark/lib:/opt/spark/lib
     depends_on:
       - postgres
+      - mysql
     command: tail -f /dev/null
     healthcheck:
       test: ["CMD", "python", "-c", "import great_expectations"]
@@ -153,6 +139,7 @@ services:
       retries: 3
     networks:
       - car-booking-network
+
   dashboard:
     image: python:3.10-slim
     container_name: dashboard
@@ -163,10 +150,11 @@ services:
     environment:
       - MYSQL_HOST=mysql
     command: >
-      sh -c "pip install dash plotly mysql-connector-python pandas --quiet &&
-            python /app/dashboard.py"
+      sh -c "pip install dash plotly mysql-connector-python pandas sqlalchemy --quiet &&
+             python /app/dashboard.py"
     depends_on:
       - mysql
+    restart: "no"
     networks:
       - car-booking-network
 
@@ -175,6 +163,5 @@ networks:
     driver: bridge
 
 volumes:
-  #jenkins_home:
   postgres_data:
   mysql_data:

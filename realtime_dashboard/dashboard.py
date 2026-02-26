@@ -19,7 +19,7 @@ def get_data():
 
 # ============ APP ============
 app = dash.Dash(__name__)
-app.title = "Car Booking Pipeline Dashboard"
+app.title = "Car Booking Data Pipeline Monitor"
 
 booking_df, validation_df, expectation_df, failed_df = get_data()
 
@@ -31,221 +31,211 @@ CHART_STYLE = {
     "title_font": {"color": "white", "size": 16}
 }
 
+def empty_fig(title):
+    fig = go.Figure()
+    fig.add_annotation(text="No data available", xref="paper", yref="paper",
+                       x=0.5, y=0.5, showarrow=False, font={"color": "white", "size": 18})
+    fig.update_layout(**CHART_STYLE, title=title)
+    return fig
+
 # ============ LAYOUT ============
 app.layout = html.Div(
     style={"backgroundColor": "#1a1a2e", "minHeight": "100vh", "padding": "20px", "fontFamily": "Arial"},
     children=[
 
-        # Header
+        # ============ HEADER ============
         html.Div(
-            style={"textAlign": "center", "padding": "20px", "marginBottom": "30px"},
+            style={"textAlign": "center", "padding": "20px", "marginBottom": "10px"},
             children=[
-                html.H1("🚗 Car Booking Pipeline Dashboard",
-                        style={"color": "#e94560", "fontSize": "36px"}),
-                html.P("Real-time Data Engineering Pipeline Monitor",
-                       style={"color": "#a8a8b3", "fontSize": "16px"}),
-                html.Button("🔄 Refresh Data", id="refresh-btn",
-                            style={"backgroundColor": "#e94560", "color": "white",
-                                   "border": "none", "padding": "10px 20px",
-                                   "borderRadius": "5px", "cursor": "pointer",
-                                   "fontSize": "14px"}),
+                html.H1("🚗 Car Booking Data Pipeline Monitor",
+                        style={"color": "#e94560", "fontSize": "36px", "margin": "0"}),
+                html.P("Kafka → Spark Streaming → Delta Lake → PostgreSQL → MySQL",
+                       style={"color": "#a8a8b3", "fontSize": "14px", "margin": "8px 0"}),
+                html.Div(
+                    style={"display": "flex", "justifyContent": "center", "gap": "15px", "marginTop": "15px"},
+                    children=[
+                        html.Button("🔄 Refresh", id="refresh-btn",
+                                    style={"backgroundColor": "#e94560", "color": "white",
+                                           "border": "none", "padding": "8px 25px",
+                                           "borderRadius": "5px", "cursor": "pointer", "fontSize": "14px"}),
+                        html.Span(id="last-updated",
+                                  style={"color": "#a8a8b3", "lineHeight": "35px", "fontSize": "13px"})
+                    ]
+                ),
                 dcc.Interval(id="auto-refresh", interval=30000, n_intervals=0)
             ]
         ),
 
-        # ============ BOOKING KPI CARDS ============
-        html.H2("📊 Booking Overview", style={"color": "white", "marginBottom": "15px"}),
+        # ============ SECTION 1: PIPELINE OVERVIEW ============
+        html.Hr(style={"borderColor": "#0f3460", "margin": "20px 0"}),
+        html.H2("📦 Pipeline Overview",
+                style={"color": "#4fc3f7", "marginBottom": "15px", "fontSize": "22px"}),
+
         html.Div(
-            style={"display": "flex", "justifyContent": "space-around", "marginBottom": "30px"},
+            style={"display": "flex", "gap": "15px", "marginBottom": "30px"},
             children=[
                 html.Div(
                     style={"backgroundColor": "#16213e", "padding": "20px", "borderRadius": "10px",
-                           "textAlign": "center", "width": "18%", "border": "1px solid #e94560"},
+                           "textAlign": "center", "flex": "1", "border": "1px solid #e94560"},
                     children=[
-                        html.H2(id="kpi-bookings", style={"color": "#e94560", "fontSize": "32px", "margin": "0"}),
-                        html.P("Total Bookings", style={"color": "#a8a8b3"})
+                        html.H2(id="kpi-bookings", style={"color": "#e94560", "fontSize": "30px", "margin": "0"}),
+                        html.P("Total Bookings", style={"color": "#a8a8b3", "margin": "5px 0 0 0"})
                     ]
                 ),
                 html.Div(
                     style={"backgroundColor": "#16213e", "padding": "20px", "borderRadius": "10px",
-                           "textAlign": "center", "width": "18%", "border": "1px solid #4fc3f7"},
+                           "textAlign": "center", "flex": "1", "border": "1px solid #4fc3f7"},
                     children=[
-                        html.H2(id="kpi-customers", style={"color": "#4fc3f7", "fontSize": "32px", "margin": "0"}),
-                        html.P("Total Customers", style={"color": "#a8a8b3"})
+                        html.H2(id="kpi-customers", style={"color": "#4fc3f7", "fontSize": "30px", "margin": "0"}),
+                        html.P("Unique Customers", style={"color": "#a8a8b3", "margin": "5px 0 0 0"})
                     ]
                 ),
                 html.Div(
                     style={"backgroundColor": "#16213e", "padding": "20px", "borderRadius": "10px",
-                           "textAlign": "center", "width": "18%", "border": "1px solid #81c784"},
+                           "textAlign": "center", "flex": "1", "border": "1px solid #81c784"},
                     children=[
-                        html.H2(id="kpi-revenue", style={"color": "#81c784", "fontSize": "32px", "margin": "0"}),
-                        html.P("Total Revenue", style={"color": "#a8a8b3"})
+                        html.H2(id="kpi-revenue", style={"color": "#81c784", "fontSize": "30px", "margin": "0"}),
+                        html.P("Total Revenue", style={"color": "#a8a8b3", "margin": "5px 0 0 0"})
                     ]
                 ),
                 html.Div(
                     style={"backgroundColor": "#16213e", "padding": "20px", "borderRadius": "10px",
-                           "textAlign": "center", "width": "18%", "border": "1px solid #ffb74d"},
+                           "textAlign": "center", "flex": "1", "border": "1px solid #ffb74d"},
                     children=[
-                        html.H2(id="kpi-cars", style={"color": "#ffb74d", "fontSize": "32px", "margin": "0"}),
-                        html.P("Total Cars", style={"color": "#a8a8b3"})
+                        html.H2(id="kpi-cars", style={"color": "#ffb74d", "fontSize": "30px", "margin": "0"}),
+                        html.P("Unique Cars", style={"color": "#a8a8b3", "margin": "5px 0 0 0"})
                     ]
                 ),
                 html.Div(
                     style={"backgroundColor": "#16213e", "padding": "20px", "borderRadius": "10px",
-                           "textAlign": "center", "width": "18%", "border": "1px solid #ce93d8"},
+                           "textAlign": "center", "flex": "1", "border": "1px solid #ce93d8"},
                     children=[
-                        html.H2(id="kpi-success-rate", style={"color": "#ce93d8", "fontSize": "32px", "margin": "0"}),
-                        html.P("Avg GE Success Rate", style={"color": "#a8a8b3"})
+                        html.H2(id="kpi-integrity", style={"color": "#ce93d8", "fontSize": "30px", "margin": "0"}),
+                        html.P("Data Integrity Score", style={"color": "#a8a8b3", "margin": "5px 0 0 0"})
                     ]
                 ),
             ]
         ),
 
-        # Row 1 — Bookings per day + Revenue per day
-        html.Div(
-            style={"display": "flex", "gap": "20px", "marginBottom": "20px"},
-            children=[
-                html.Div(style={"width": "50%"}, children=[dcc.Graph(id="bookings-per-day")]),
-                html.Div(style={"width": "50%"}, children=[dcc.Graph(id="revenue-per-day")])
-            ]
-        ),
+        # ============ SECTION 2: BOOKING ANALYTICS ============
+        html.Hr(style={"borderColor": "#0f3460", "margin": "20px 0"}),
+        html.H2("📊 Booking Analytics",
+                style={"color": "#4fc3f7", "marginBottom": "15px", "fontSize": "22px"}),
 
-        # Row 2 — Popular cars + Payment methods
-        html.Div(
-            style={"display": "flex", "gap": "20px", "marginBottom": "20px"},
-            children=[
-                html.Div(style={"width": "50%"}, children=[dcc.Graph(id="popular-cars")]),
-                html.Div(style={"width": "50%"}, children=[dcc.Graph(id="payment-methods")])
-            ]
-        ),
+        html.Div(style={"display": "flex", "gap": "20px", "marginBottom": "20px"},
+                 children=[
+                     html.Div(style={"width": "50%"}, children=[dcc.Graph(id="bookings-per-day")]),
+                     html.Div(style={"width": "50%"}, children=[dcc.Graph(id="revenue-per-day")])
+                 ]),
+        html.Div(style={"display": "flex", "gap": "20px", "marginBottom": "20px"},
+                 children=[
+                     html.Div(style={"width": "50%"}, children=[dcc.Graph(id="popular-cars")]),
+                     html.Div(style={"width": "50%"}, children=[dcc.Graph(id="payment-methods")])
+                 ]),
+        html.Div(style={"display": "flex", "gap": "20px", "marginBottom": "20px"},
+                 children=[
+                     html.Div(style={"width": "50%"}, children=[dcc.Graph(id="loyalty-tiers")]),
+                     html.Div(style={"width": "50%"}, children=[dcc.Graph(id="insurance-coverage")])
+                 ]),
+        html.Div(style={"display": "flex", "gap": "20px", "marginBottom": "20px"},
+                 children=[
+                     html.Div(style={"width": "50%"}, children=[dcc.Graph(id="pickup-locations")]),
+                     html.Div(style={"width": "50%"}, children=[dcc.Graph(id="drop-locations")])
+                 ]),
 
-        # Row 3 — Loyalty tiers + Insurance coverage
-        html.Div(
-            style={"display": "flex", "gap": "20px", "marginBottom": "20px"},
-            children=[
-                html.Div(style={"width": "50%"}, children=[dcc.Graph(id="loyalty-tiers")]),
-                html.Div(style={"width": "50%"}, children=[dcc.Graph(id="insurance-coverage")])
-            ]
-        ),
+        # ============ SECTION 3: DATA VALIDATION REPORT ============
+        html.Hr(style={"borderColor": "#0f3460", "margin": "20px 0"}),
+        html.H2("🔍 Data Validation Report",
+                style={"color": "#4fc3f7", "marginBottom": "15px", "fontSize": "22px"}),
 
-        # Row 4 — Pickup locations + GE Validation history
+        # Validation KPI Cards
         html.Div(
-            style={"display": "flex", "gap": "20px", "marginBottom": "20px"},
-            children=[
-                html.Div(style={"width": "50%"}, children=[dcc.Graph(id="pickup-locations")]),
-                html.Div(style={"width": "50%"}, children=[dcc.Graph(id="ge-validation")])
-            ]
-        ),
-
-        # ============ GE VALIDATION SECTION ============
-        html.Hr(style={"borderColor": "#e94560", "margin": "30px 0"}),
-        html.H2("🔍 Data Quality - Great Expectations",
-                style={"color": "#e94560", "marginBottom": "20px"}),
-
-        # GE KPI Cards
-        html.Div(
-            style={"display": "flex", "justifyContent": "space-around", "marginBottom": "30px"},
+            style={"display": "flex", "gap": "15px", "marginBottom": "30px"},
             children=[
                 html.Div(
                     style={"backgroundColor": "#16213e", "padding": "20px", "borderRadius": "10px",
-                           "textAlign": "center", "width": "22%", "border": "1px solid #81c784"},
+                           "textAlign": "center", "flex": "1", "border": "1px solid #81c784"},
                     children=[
-                        html.H2(id="ge-total-runs", style={"color": "#81c784", "fontSize": "32px", "margin": "0"}),
-                        html.P("Total Validation Runs", style={"color": "#a8a8b3"})
+                        html.H2(id="val-runs", style={"color": "#81c784", "fontSize": "30px", "margin": "0"}),
+                        html.P("Pipeline Runs", style={"color": "#a8a8b3", "margin": "5px 0 0 0"})
                     ]
                 ),
                 html.Div(
                     style={"backgroundColor": "#16213e", "padding": "20px", "borderRadius": "10px",
-                           "textAlign": "center", "width": "22%", "border": "1px solid #4fc3f7"},
+                           "textAlign": "center", "flex": "1", "border": "1px solid #4fc3f7"},
                     children=[
-                        html.H2(id="ge-passed", style={"color": "#4fc3f7", "fontSize": "32px", "margin": "0"}),
-                        html.P("Total Passed Expectations", style={"color": "#a8a8b3"})
+                        html.H2(id="val-rules-passed", style={"color": "#4fc3f7", "fontSize": "30px", "margin": "0"}),
+                        html.P("Rules Passed", style={"color": "#a8a8b3", "margin": "5px 0 0 0"})
                     ]
                 ),
                 html.Div(
                     style={"backgroundColor": "#16213e", "padding": "20px", "borderRadius": "10px",
-                           "textAlign": "center", "width": "22%", "border": "1px solid #e94560"},
+                           "textAlign": "center", "flex": "1", "border": "1px solid #e94560"},
                     children=[
-                        html.H2(id="ge-failed", style={"color": "#e94560", "fontSize": "32px", "margin": "0"}),
-                        html.P("Total Failed Expectations", style={"color": "#a8a8b3"})
+                        html.H2(id="val-rules-violated", style={"color": "#e94560", "fontSize": "30px", "margin": "0"}),
+                        html.P("Rules Violated", style={"color": "#a8a8b3", "margin": "5px 0 0 0"})
                     ]
                 ),
                 html.Div(
                     style={"backgroundColor": "#16213e", "padding": "20px", "borderRadius": "10px",
-                           "textAlign": "center", "width": "22%", "border": "1px solid #ffb74d"},
+                           "textAlign": "center", "flex": "1", "border": "1px solid #ffb74d"},
                     children=[
-                        html.H2(id="ge-failed-records", style={"color": "#ffb74d", "fontSize": "32px", "margin": "0"}),
-                        html.P("Total Failed Records", style={"color": "#a8a8b3"})
+                        html.H2(id="val-anomalous", style={"color": "#ffb74d", "fontSize": "30px", "margin": "0"}),
+                        html.P("Anomalous Records", style={"color": "#a8a8b3", "margin": "5px 0 0 0"})
                     ]
                 ),
             ]
         ),
 
-        # GE Row 1 — Expectation Pass/Fail + Column wise failures
+        html.Div(style={"display": "flex", "gap": "20px", "marginBottom": "20px"},
+                 children=[
+                     html.Div(style={"width": "50%"}, children=[dcc.Graph(id="val-gauge")]),
+                     html.Div(style={"width": "50%"}, children=[dcc.Graph(id="val-run-history")])
+                 ]),
+        html.Div(style={"display": "flex", "gap": "20px", "marginBottom": "20px"},
+                 children=[
+                     html.Div(style={"width": "50%"}, children=[dcc.Graph(id="val-checks-passfail")]),
+                     html.Div(style={"width": "50%"}, children=[dcc.Graph(id="val-column-anomalies")])
+                 ]),
+        html.Div(style={"display": "flex", "gap": "20px", "marginBottom": "20px"},
+                 children=[
+                     html.Div(style={"width": "50%"}, children=[dcc.Graph(id="val-anomalous-loyalty")]),
+                     html.Div(style={"width": "50%"}, children=[dcc.Graph(id="val-payment-dist")])
+                 ]),
+
+        # ============ SECTION 4: ANOMALOUS RECORDS EXPLORER ============
+        html.Hr(style={"borderColor": "#0f3460", "margin": "20px 0"}),
+        html.H2("🚨 Anomalous Records Explorer",
+                style={"color": "#4fc3f7", "marginBottom": "15px", "fontSize": "22px"}),
+
         html.Div(
-            style={"display": "flex", "gap": "20px", "marginBottom": "20px"},
+            style={"display": "flex", "gap": "20px", "marginBottom": "15px"},
             children=[
-                html.Div(style={"width": "50%"}, children=[dcc.Graph(id="ge-expectation-passfail")]),
-                html.Div(style={"width": "50%"}, children=[dcc.Graph(id="ge-column-failures")])
+                dcc.Dropdown(id="run-dropdown", placeholder="🔍 Filter by Pipeline Run...",
+                             style={"width": "350px", "color": "black"}),
+                dcc.Dropdown(id="check-dropdown", placeholder="🔍 Filter by Validation Rule...",
+                             style={"width": "350px", "color": "black"}),
             ]
         ),
 
-        # GE Row 2 — Gauge chart + Failed loyalty tier
-        html.Div(
-            style={"display": "flex", "gap": "20px", "marginBottom": "20px"},
-            children=[
-                html.Div(style={"width": "50%"}, children=[dcc.Graph(id="ge-gauge")]),
-                html.Div(style={"width": "50%"}, children=[dcc.Graph(id="ge-failed-loyalty")])
-            ]
-        ),
-
-        # GE Row 3 — Run dropdown + Failed records table
-        html.Div(
-            style={"marginBottom": "20px"},
-            children=[
-                html.H3("🔎 Failed Records Detail", style={"color": "white", "marginBottom": "10px"}),
-                html.Div(
-                    style={"display": "flex", "gap": "20px", "marginBottom": "10px"},
-                    children=[
-                        dcc.Dropdown(
-                            id="run-dropdown",
-                            placeholder="Select Run...",
-                            style={"width": "300px", "backgroundColor": "#16213e", "color": "black"}
-                        ),
-                        dcc.Dropdown(
-                            id="expectation-dropdown",
-                            placeholder="Filter by Expectation...",
-                            style={"width": "300px", "backgroundColor": "#16213e", "color": "black"}
-                        ),
-                    ]
-                ),
-                dash_table.DataTable(
-                    id="failed-records-table",
-                    style_table={"overflowX": "auto"},
-                    style_cell={
-                        "backgroundColor": "#16213e",
-                        "color": "#a8a8b3",
-                        "border": "1px solid #0f3460",
-                        "textAlign": "left",
-                        "padding": "8px",
-                        "fontSize": "12px"
-                    },
-                    style_header={
-                        "backgroundColor": "#0f3460",
-                        "color": "white",
-                        "fontWeight": "bold"
-                    },
-                    style_data_conditional=[
-                        {
-                            "if": {"row_index": "odd"},
-                            "backgroundColor": "#1a1a2e"
-                        }
-                    ],
-                    page_size=10,
-                    filter_action="native",
-                    sort_action="native"
-                )
-            ]
+        dash_table.DataTable(
+            id="anomalous-table",
+            style_table={"overflowX": "auto"},
+            style_cell={
+                "backgroundColor": "#16213e", "color": "#a8a8b3",
+                "border": "1px solid #0f3460", "textAlign": "left",
+                "padding": "10px", "fontSize": "12px"
+            },
+            style_header={
+                "backgroundColor": "#0f3460", "color": "white",
+                "fontWeight": "bold", "fontSize": "13px"
+            },
+            style_data_conditional=[
+                {"if": {"row_index": "odd"}, "backgroundColor": "#1a1a2e"}
+            ],
+            page_size=15,
+            filter_action="native",
+            sort_action="native"
         ),
 
         dcc.Store(id="store-data")
@@ -253,15 +243,16 @@ app.layout = html.Div(
 )
 
 
-# ============ CALLBACKS ============
+# ============ MAIN CALLBACK ============
 @app.callback(
     [
-        # Booking KPIs
+        Output("last-updated", "children"),
+        # Pipeline KPIs
         Output("kpi-bookings", "children"),
         Output("kpi-customers", "children"),
         Output("kpi-revenue", "children"),
         Output("kpi-cars", "children"),
-        Output("kpi-success-rate", "children"),
+        Output("kpi-integrity", "children"),
         # Booking charts
         Output("bookings-per-day", "figure"),
         Output("revenue-per-day", "figure"),
@@ -270,20 +261,22 @@ app.layout = html.Div(
         Output("loyalty-tiers", "figure"),
         Output("insurance-coverage", "figure"),
         Output("pickup-locations", "figure"),
-        Output("ge-validation", "figure"),
-        # GE KPIs
-        Output("ge-total-runs", "children"),
-        Output("ge-passed", "children"),
-        Output("ge-failed", "children"),
-        Output("ge-failed-records", "children"),
-        # GE charts
-        Output("ge-expectation-passfail", "figure"),
-        Output("ge-column-failures", "figure"),
-        Output("ge-gauge", "figure"),
-        Output("ge-failed-loyalty", "figure"),
+        Output("drop-locations", "figure"),
+        # Validation KPIs
+        Output("val-runs", "children"),
+        Output("val-rules-passed", "children"),
+        Output("val-rules-violated", "children"),
+        Output("val-anomalous", "children"),
+        # Validation charts
+        Output("val-gauge", "figure"),
+        Output("val-run-history", "figure"),
+        Output("val-checks-passfail", "figure"),
+        Output("val-column-anomalies", "figure"),
+        Output("val-anomalous-loyalty", "figure"),
+        Output("val-payment-dist", "figure"),
         # Dropdowns
         Output("run-dropdown", "options"),
-        Output("expectation-dropdown", "options"),
+        Output("check-dropdown", "options"),
     ],
     [Input("refresh-btn", "n_clicks"),
      Input("auto-refresh", "n_intervals")]
@@ -291,142 +284,79 @@ app.layout = html.Div(
 def update_all(n_clicks, n_intervals):
     booking_df, validation_df, expectation_df, failed_df = get_data()
 
-    # ===== BOOKING KPIs =====
-    kpi_bookings = f"{booking_df['booking_id'].nunique():,}"
+    last_updated = f"🕐 Last updated: {pd.Timestamp.now().strftime('%d %b %Y %H:%M:%S')}"
+
+    # ===== PIPELINE KPIs =====
+    kpi_bookings  = f"{booking_df['booking_id'].nunique():,}"
     kpi_customers = f"{booking_df['customer_id'].nunique():,}"
-    kpi_revenue = f"₹{booking_df['payment_amount'].sum():,.0f}"
-    kpi_cars = f"{booking_df['car_id'].nunique():,}"
-    kpi_success = f"{validation_df['success_rate'].mean():.1f}%" if not validation_df.empty else "N/A"
+    kpi_revenue   = f"₹{booking_df['payment_amount'].sum():,.0f}"
+    kpi_cars      = f"{booking_df['car_id'].nunique():,}"
+    kpi_integrity = f"{validation_df['success_rate'].mean():.1f}%" if not validation_df.empty else "N/A"
 
     # ===== BOOKING CHARTS =====
-
-    # 1. Bookings per day
     bookings_day = booking_df.groupby("booking_date")["booking_id"].nunique().reset_index()
     fig1 = px.line(bookings_day, x="booking_date", y="booking_id",
-                   title="📅 Bookings Per Day",
-                   color_discrete_sequence=["#e94560"])
+                   title="📅 Bookings Per Day", color_discrete_sequence=["#e94560"])
     fig1.update_layout(**CHART_STYLE)
 
-    # 2. Revenue per day
     revenue_day = booking_df.groupby("booking_date")["payment_amount"].sum().reset_index()
     fig2 = px.area(revenue_day, x="booking_date", y="payment_amount",
-                   title="💰 Revenue Per Day",
-                   color_discrete_sequence=["#81c784"])
+                   title="💰 Revenue Per Day", color_discrete_sequence=["#81c784"])
     fig2.update_layout(**CHART_STYLE)
 
-    # 3. Popular cars
     popular_cars = booking_df["model"].value_counts().reset_index()
     popular_cars.columns = ["model", "count"]
-    fig3 = px.bar(popular_cars, x="model", y="count",
-                  title="🚗 Popular Car Models",
+    fig3 = px.bar(popular_cars, x="model", y="count", title="🚗 Popular Car Models",
                   color="count", color_continuous_scale="reds")
     fig3.update_layout(**CHART_STYLE)
 
-    # 4. Payment methods
     payment = booking_df["payment_method"].value_counts().reset_index()
     payment.columns = ["method", "count"]
-    fig4 = px.pie(payment, names="method", values="count",
-                  title="💳 Payment Methods",
+    fig4 = px.pie(payment, names="method", values="count", title="💳 Payment Methods",
                   color_discrete_sequence=px.colors.sequential.RdBu)
     fig4.update_layout(**CHART_STYLE)
 
-    # 5. Loyalty tiers
     loyalty = booking_df["loyalty_tier"].value_counts().reset_index()
     loyalty.columns = ["tier", "count"]
-    fig5 = px.bar(loyalty, x="tier", y="count",
-                  title="⭐ Loyalty Tiers",
-                  color="tier",
-                  color_discrete_map={
-                      "platinum": "#ce93d8", "gold": "#ffb74d",
-                      "silver": "#a8a8b3", "bronze": "#ff8a65"
-                  })
+    fig5 = px.bar(loyalty, x="tier", y="count", title="⭐ Loyalty Tiers", color="tier",
+                  color_discrete_map={"platinum": "#ce93d8", "gold": "#ffb74d",
+                                      "silver": "#a8a8b3", "bronze": "#ff8a65"})
     fig5.update_layout(**CHART_STYLE)
 
-    # 6. Insurance coverage
     insurance = booking_df["insurance_coverage"].value_counts().reset_index()
     insurance.columns = ["coverage", "count"]
-    fig6 = px.pie(insurance, names="coverage", values="count",
-                  title="🛡️ Insurance Coverage",
+    fig6 = px.pie(insurance, names="coverage", values="count", title="🛡️ Insurance Coverage",
                   color_discrete_sequence=["#4fc3f7", "#e94560"])
     fig6.update_layout(**CHART_STYLE)
 
-    # 7. Pickup locations
     pickup = booking_df["pickup_location"].value_counts().head(10).reset_index()
     pickup.columns = ["location", "count"]
-    fig7 = px.bar(pickup, x="count", y="location",
+    fig7 = px.bar(pickup, x="count", y="location", orientation="h",
                   title="📍 Top 10 Pickup Locations",
-                  orientation="h", color="count",
-                  color_continuous_scale="blues")
+                  color="count", color_continuous_scale="blues")
     fig7.update_layout(**CHART_STYLE)
 
-    # 8. GE Validation history
-    if not validation_df.empty:
-        fig8 = px.line(validation_df, x="created_at", y="success_rate",
-                       title="✅ GE Validation Success Rate History",
-                       color_discrete_sequence=["#81c784"], markers=True)
-        fig8.add_hline(y=100, line_dash="dash", line_color="#e94560",
-                       annotation_text="100% Target")
-    else:
-        fig8 = go.Figure()
-        fig8.add_annotation(text="No validation data yet",
-                            xref="paper", yref="paper",
-                            x=0.5, y=0.5, showarrow=False,
-                            font={"color": "white", "size": 20})
-    fig8.update_layout(**CHART_STYLE, title="✅ GE Validation Success Rate History")
+    drop = booking_df["drop_location"].value_counts().head(10).reset_index()
+    drop.columns = ["location", "count"]
+    fig_drop = px.bar(drop, x="count", y="location", orientation="h",
+                      title="📍 Top 10 Drop Locations",
+                      color="count", color_continuous_scale="greens")
+    fig_drop.update_layout(**CHART_STYLE)
 
-    # ===== GE KPIs =====
-    ge_total_runs = f"{len(validation_df):,}" if not validation_df.empty else "0"
-    ge_passed = f"{expectation_df['success'].sum():,}" if not expectation_df.empty else "0"
-    ge_failed = f"{(~expectation_df['success'].astype(bool)).sum():,}" if not expectation_df.empty else "0"
-    ge_failed_records = f"{len(failed_df):,}" if not failed_df.empty else "0"
+    # ===== VALIDATION KPIs =====
+    val_runs     = f"{len(validation_df):,}" if not validation_df.empty else "0"
+    val_passed   = f"{expectation_df['success'].sum():,}" if not expectation_df.empty else "0"
+    val_violated = f"{(~expectation_df['success'].astype(bool)).sum():,}" if not expectation_df.empty else "0"
+    val_anomalous = f"{len(failed_df):,}" if not failed_df.empty else "0"
 
-    # ===== GE CHARTS =====
-
-    # 9. Expectation Pass/Fail Bar Chart
-    if not expectation_df.empty:
-        exp_summary = expectation_df.groupby("expectation_type")["success"].agg(
-            passed=lambda x: x.astype(bool).sum(),
-            failed=lambda x: (~x.astype(bool)).sum()
-        ).reset_index()
-        exp_melted = exp_summary.melt(id_vars="expectation_type",
-                                      value_vars=["passed", "failed"],
-                                      var_name="status", value_name="count")
-        fig9 = px.bar(exp_melted, x="expectation_type", y="count",
-                      color="status", barmode="group",
-                      title="📊 Expectation Pass/Fail",
-                      color_discrete_map={"passed": "#81c784", "failed": "#e94560"})
-        fig9.update_layout(**CHART_STYLE, xaxis_tickangle=-45)
-    else:
-        fig9 = go.Figure()
-        fig9.add_annotation(text="No expectation data", xref="paper", yref="paper",
-                            x=0.5, y=0.5, showarrow=False, font={"color": "white", "size": 20})
-        fig9.update_layout(**CHART_STYLE, title="📊 Expectation Pass/Fail")
-
-    # 10. Column wise failures
-    if not expectation_df.empty:
-        col_failures = expectation_df[~expectation_df["success"].astype(bool)].groupby(
-            "column_name")["unexpected_count"].sum().reset_index()
-        col_failures.columns = ["column_name", "failed_count"]
-        col_failures = col_failures.sort_values("failed_count", ascending=True)
-        fig10 = px.bar(col_failures, x="failed_count", y="column_name",
-                       orientation="h",
-                       title="⚠️ Failed Records by Column",
-                       color="failed_count",
-                       color_continuous_scale="reds")
-        fig10.update_layout(**CHART_STYLE)
-    else:
-        fig10 = go.Figure()
-        fig10.add_annotation(text="No failures found", xref="paper", yref="paper",
-                             x=0.5, y=0.5, showarrow=False, font={"color": "white", "size": 20})
-        fig10.update_layout(**CHART_STYLE, title="⚠️ Failed Records by Column")
-
-    # 11. Gauge Chart — Data Quality Score
+    # ===== GAUGE =====
     avg_rate = validation_df["success_rate"].mean() if not validation_df.empty else 0
-    fig11 = go.Figure(go.Indicator(
+    fig_gauge = go.Figure(go.Indicator(
         mode="gauge+number+delta",
         value=avg_rate,
-        title={"text": "🎯 Data Quality Score", "font": {"color": "white"}},
-        delta={"reference": 100, "increasing": {"color": "#81c784"}},
+        title={"text": "🎯 Data Integrity Score", "font": {"color": "white", "size": 16}},
+        delta={"reference": 100},
+        number={"suffix": "%", "font": {"color": "white"}},
         gauge={
             "axis": {"range": [0, 100], "tickcolor": "#a8a8b3"},
             "bar": {"color": "#e94560"},
@@ -437,80 +367,132 @@ def update_all(n_clicks, n_intervals):
                 {"range": [50, 80], "color": "#ffb74d"},
                 {"range": [80, 100], "color": "#81c784"}
             ],
-            "threshold": {
-                "line": {"color": "white", "width": 4},
-                "thickness": 0.75,
-                "value": 100
-            }
+            "threshold": {"line": {"color": "white", "width": 4}, "thickness": 0.75, "value": 100}
         }
     ))
-    fig11.update_layout(**CHART_STYLE, title="🎯 Data Quality Score")
+    fig_gauge.update_layout(**CHART_STYLE)
 
-    # 12. Failed records by loyalty tier
+    # ===== RUN HISTORY =====
+    if not validation_df.empty:
+        fig_history = px.line(validation_df, x="created_at", y="success_rate",
+                              title="📈 Validation Run History",
+                              color_discrete_sequence=["#81c784"], markers=True)
+        fig_history.add_hline(y=100, line_dash="dash", line_color="#e94560",
+                              annotation_text="100% Target")
+        fig_history.update_layout(**CHART_STYLE)
+    else:
+        fig_history = empty_fig("📈 Validation Run History")
+
+    # ===== CHECKS PASS/FAIL =====
+    if not expectation_df.empty:
+        exp_summary = expectation_df.groupby("expectation_type")["success"].agg(
+            passed=lambda x: x.astype(bool).sum(),
+            violated=lambda x: (~x.astype(bool)).sum()
+        ).reset_index()
+        exp_melted = exp_summary.melt(id_vars="expectation_type",
+                                      value_vars=["passed", "violated"],
+                                      var_name="status", value_name="count")
+        # Clean names
+        exp_melted["expectation_type"] = exp_melted["expectation_type"].str.replace(
+            "expect_", "").str.replace("_", " ").str.title()
+        fig_checks = px.bar(exp_melted, x="expectation_type", y="count",
+                            color="status", barmode="group",
+                            title="✅ Validation Rules — Pass vs Violated",
+                            color_discrete_map={"passed": "#81c784", "violated": "#e94560"})
+        fig_checks.update_layout(**CHART_STYLE, xaxis_tickangle=-45)
+    else:
+        fig_checks = empty_fig("✅ Validation Rules — Pass vs Violated")
+
+    # ===== COLUMN ANOMALIES =====
+    if not expectation_df.empty:
+        col_fail = expectation_df[~expectation_df["success"].astype(bool)].groupby(
+            "column_name")["unexpected_count"].sum().reset_index()
+        col_fail.columns = ["column_name", "anomaly_count"]
+        col_fail = col_fail.sort_values("anomaly_count", ascending=True)
+        fig_col = px.bar(col_fail, x="anomaly_count", y="column_name",
+                         orientation="h", title="⚠️ Anomalies Detected by Column",
+                         color="anomaly_count", color_continuous_scale="reds")
+        fig_col.update_layout(**CHART_STYLE)
+    else:
+        fig_col = empty_fig("⚠️ Anomalies Detected by Column")
+
+    # ===== ANOMALOUS BY LOYALTY =====
     if not failed_df.empty:
         failed_loyalty = failed_df["loyalty_tier"].value_counts().reset_index()
         failed_loyalty.columns = ["tier", "count"]
-        fig12 = px.pie(failed_loyalty, names="tier", values="count",
-                       title="⭐ Failed Records by Loyalty Tier",
-                       color="tier",
-                       color_discrete_map={
-                           "platinum": "#ce93d8", "gold": "#ffb74d",
-                           "silver": "#a8a8b3", "bronze": "#ff8a65"
-                       })
-        fig12.update_layout(**CHART_STYLE)
+        fig_loyalty = px.pie(failed_loyalty, names="tier", values="count",
+                             title="⭐ Anomalous Records by Customer Segment",
+                             color="tier",
+                             color_discrete_map={"platinum": "#ce93d8", "gold": "#ffb74d",
+                                                 "silver": "#a8a8b3", "bronze": "#ff8a65"})
+        fig_loyalty.update_layout(**CHART_STYLE)
     else:
-        fig12 = go.Figure()
-        fig12.add_annotation(text="No failed records", xref="paper", yref="paper",
-                             x=0.5, y=0.5, showarrow=False, font={"color": "white", "size": 20})
-        fig12.update_layout(**CHART_STYLE, title="⭐ Failed Records by Loyalty Tier")
+        fig_loyalty = empty_fig("⭐ Anomalous Records by Customer Segment")
+
+    # ===== PAYMENT DISTRIBUTION =====
+    if not failed_df.empty:
+        fig_payment = px.histogram(failed_df, x="payment_amount",
+                                   title="💰 Anomalous Records — Payment Distribution",
+                                   color_discrete_sequence=["#e94560"], nbins=30)
+        fig_payment.update_layout(**CHART_STYLE)
+    else:
+        fig_payment = empty_fig("💰 Anomalous Records — Payment Distribution")
 
     # ===== DROPDOWNS =====
-    run_options = [{"label": r, "value": r} for r in failed_df["run_identifier"].unique()] if not failed_df.empty else []
-    exp_options = [{"label": e, "value": e} for e in failed_df["expectation_type"].unique()] if not failed_df.empty else []
+    run_options = [{"label": f"Run: {r}", "value": r}
+                   for r in failed_df["run_identifier"].unique()] if not failed_df.empty else []
+    check_options = [{"label": e.replace("expect_", "").replace("_", " ").title(), "value": e}
+                     for e in failed_df["expectation_type"].unique()] if not failed_df.empty else []
 
     return (
-        kpi_bookings, kpi_customers, kpi_revenue, kpi_cars, kpi_success,
-        fig1, fig2, fig3, fig4, fig5, fig6, fig7, fig8,
-        ge_total_runs, ge_passed, ge_failed, ge_failed_records,
-        fig9, fig10, fig11, fig12,
-        run_options, exp_options
+        last_updated,
+        kpi_bookings, kpi_customers, kpi_revenue, kpi_cars, kpi_integrity,
+        fig1, fig2, fig3, fig4, fig5, fig6, fig7, fig_drop,
+        val_runs, val_passed, val_violated, val_anomalous,
+        fig_gauge, fig_history, fig_checks, fig_col, fig_loyalty, fig_payment,
+        run_options, check_options
     )
 
 
-# ===== FAILED RECORDS TABLE CALLBACK =====
+# ============ ANOMALOUS RECORDS TABLE ============
 @app.callback(
-    [Output("failed-records-table", "data"),
-     Output("failed-records-table", "columns")],
+    [Output("anomalous-table", "data"),
+     Output("anomalous-table", "columns")],
     [Input("run-dropdown", "value"),
-     Input("expectation-dropdown", "value"),
+     Input("check-dropdown", "value"),
      Input("refresh-btn", "n_clicks"),
      Input("auto-refresh", "n_intervals")]
 )
-def update_failed_table(run_id, exp_type, n_clicks, n_intervals):
+def update_table(run_id, check_type, n_clicks, n_intervals):
     _, _, _, failed_df = get_data()
 
     if failed_df.empty:
         return [], []
 
-    # Filter karo
     if run_id:
         failed_df = failed_df[failed_df["run_identifier"] == run_id]
-    if exp_type:
-        failed_df = failed_df[failed_df["expectation_type"] == exp_type]
+    if check_type:
+        failed_df = failed_df[failed_df["expectation_type"] == check_type]
 
-    # Columns select karo
-    show_cols = ["run_identifier", "expectation_type", "column_name",
-                 "failed_reason", "booking_id", "customer_name",
-                 "email", "loyalty_tier", "payment_amount"]
-
-    # Sirf jo columns exist karte hain
+    show_cols = ["run_identifier", "expectation_type", "column_name", "failed_reason",
+                 "booking_id", "customer_name", "email", "loyalty_tier", "payment_amount"]
     show_cols = [c for c in show_cols if c in failed_df.columns]
     df_show = failed_df[show_cols].head(100)
 
-    columns = [{"name": c.replace("_", " ").title(), "id": c} for c in show_cols]
-    data = df_show.to_dict("records")
-
-    return data, columns
+    # Clean column names
+    col_rename = {
+        "run_identifier": "Run ID",
+        "expectation_type": "Validation Rule",
+        "column_name": "Column",
+        "failed_reason": "Reason",
+        "booking_id": "Booking ID",
+        "customer_name": "Customer",
+        "email": "Email",
+        "loyalty_tier": "Tier",
+        "payment_amount": "Amount"
+    }
+    columns = [{"name": col_rename.get(c, c), "id": c} for c in show_cols]
+    return df_show.to_dict("records"), columns
 
 
 if __name__ == "__main__":

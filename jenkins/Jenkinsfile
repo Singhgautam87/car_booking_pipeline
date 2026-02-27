@@ -62,11 +62,11 @@ pipeline {
                     echo "✅ Spark files copied to spark-master!"
 
                     # ✅ Config copy karo spark + GE dono mein
-                    docker exec spark-master mkdir -p /opt/config
+                    docker exec -u root spark-master mkdir -p /opt/config
                     docker cp config/config.json spark-master:/opt/config/config.json
                     echo "✅ Config copied to spark-master!"
 
-                    docker exec great_expectations mkdir -p /opt/config
+                    docker exec -u root great_expectations mkdir -p /opt/config
                     docker cp config/config.json great_expectations:/opt/config/config.json
                     echo "✅ Config copied to great_expectations!"
 

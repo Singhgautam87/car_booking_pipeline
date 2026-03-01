@@ -229,6 +229,9 @@ pipeline {
                     docker cp great_expectations/great_expectations/expectations/customer_booking_suite.json \
                         great_expectations:/ge/great_expectations/expectations/customer_booking_suite.json
 
+                    # ✅ Fix 1: MySQL + dependencies install karo GE container mein
+                    docker exec great_expectations pip install mysql-connector-python psycopg2-binary sqlalchemy --quiet
+
                     docker exec mysql mysql -u admin -padmin booking -e "
                         DELETE FROM validation_results;
                         DELETE FROM validation_expectation_details;
@@ -262,16 +265,25 @@ pipeline {
 
                     docker-compose -p ${COMPOSE_PROJECT} up -d dashboard
 
-                    sleep 15
+                    # ✅ Fix 2: Zyada wait karo — pip install hota hai andar
+                    echo "Waiting for dashboard pip install + startup..."
+                    sleep 60
 
+                    # ✅ Dashboard logs check karo
+                    echo "=== Dashboard Logs ==="
+                    docker logs dashboard --tail 30 || true
+
+                    # ✅ Container ke andar se check karo (Jenkins localhost alag hota hai)
                     for i in 1 2 3 4 5; do
-                        if curl -s http://localhost:8050 >/dev/null 2>&1; then
-                            echo "✅ Dashboard running at http://localhost:8050"
+                        if docker exec dashboard curl -s http://localhost:8050 >/dev/null 2>&1; then
+                            echo "✅ Dashboard is up!"
                             break
                         fi
                         echo "Waiting for dashboard... $i/5"
                         sleep 10
                     done
+
+                    echo "✅ Open in browser: http://localhost:8050"
                 '''
             }
         }
@@ -300,7 +312,7 @@ pipeline {
                 echo "=== PostgreSQL Logs ==="
                 docker logs postgres --tail 30 || true
                 echo "=== Dashboard Logs ==="
-                docker logs dashboard --tail 30 || true
+                docker logs dashboard --tail 50 || true
             '''
             echo "❌ Pipeline failed!"
         }

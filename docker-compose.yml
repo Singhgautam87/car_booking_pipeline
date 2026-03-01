@@ -158,8 +158,6 @@ services:
     container_name: dashboard
     ports:
       - "8050:8050"
-    volumes:
-      - ./realtime_dashboard:/app
     environment:
       - MYSQL_HOST=mysql
     command: >

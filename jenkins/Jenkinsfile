@@ -229,7 +229,7 @@ pipeline {
                     docker cp great_expectations/great_expectations/expectations/customer_booking_suite.json \
                         great_expectations:/ge/great_expectations/expectations/customer_booking_suite.json
 
-                    # ✅ Fix 1: MySQL + dependencies install karo GE container mein
+                    # ✅ MySQL + dependencies install karo GE container mein
                     docker exec great_expectations pip install mysql-connector-python psycopg2-binary sqlalchemy --quiet
 
                     docker exec mysql mysql -u admin -padmin booking -e "
@@ -261,19 +261,30 @@ pipeline {
         stage('Start Dashboard') {
             steps {
                 sh '''
+                    # ✅ Purana dashboard remove karo
                     docker rm -f dashboard || true
 
+                    # ✅ Fresh container start karo
                     docker-compose -p ${COMPOSE_PROJECT} up -d dashboard
 
-                    # ✅ Fix 2: Zyada wait karo — pip install hota hai andar
-                    echo "Waiting for dashboard pip install + startup..."
-                    sleep 60
+                    # ✅ dashboard.py copy karo — volume mount kaam nahi karta Jenkins mein
+                    docker exec dashboard mkdir -p /app
+                    docker cp realtime_dashboard/dashboard.py dashboard:/app/dashboard.py
+
+                    # ✅ Dependencies install karo
+                    docker exec dashboard pip install dash plotly mysql-connector-python pandas sqlalchemy --quiet
+
+                    # ✅ Background mein run karo
+                    docker exec -d dashboard python /app/dashboard.py
+
+                    echo "Waiting for dashboard to start..."
+                    sleep 30
 
                     # ✅ Dashboard logs check karo
                     echo "=== Dashboard Logs ==="
-                    docker logs dashboard --tail 30 || true
+                    docker logs dashboard --tail 20 || true
 
-                    # ✅ Container ke andar se check karo (Jenkins localhost alag hota hai)
+                    # ✅ Container ke andar se health check
                     for i in 1 2 3 4 5; do
                         if docker exec dashboard curl -s http://localhost:8050 >/dev/null 2>&1; then
                             echo "✅ Dashboard is up!"

@@ -158,9 +158,12 @@ services:
     container_name: dashboard
     ports:
       - "8050:8050"
+    volumes:
+      - ./realtime_dashboard:/app
     environment:
       - MYSQL_HOST=mysql
-    command: >
+    command: 
+      tail -f /dev/null
       sh -c "pip install dash plotly mysql-connector-python pandas sqlalchemy --quiet &&
              python /app/dashboard.py"
     depends_on:

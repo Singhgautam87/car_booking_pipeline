@@ -240,6 +240,12 @@ pipeline {
 
                     echo "Running validation..."
                     docker exec great_expectations python /ge/jobs/run_ge.py
+
+                    # ✅ Validation output verify karo
+                    echo "=== Validation Results in MySQL ==="
+                    docker exec mysql mysql -u admin -padmin booking -e "SELECT run_identifier, total_expectations, passed, failed, success_rate FROM validation_results;"
+                    docker exec mysql mysql -u admin -padmin booking -e "SELECT COUNT(*) as failed_records FROM validation_failed_records;"
+
                     echo "✅ Validation complete!"
                 '''
             }
@@ -261,13 +267,14 @@ pipeline {
         stage('Start Dashboard') {
             steps {
                 sh '''
-                    # ✅ Purana dashboard remove karo
                     docker rm -f dashboard || true
 
-                    # ✅ Fresh container start karo
                     docker-compose -p ${COMPOSE_PROJECT} up -d dashboard
 
-                    # ✅ dashboard.py copy karo — volume mount kaam nahi karta Jenkins mein
+                    # ✅ Container running hone ka wait karo
+                    sleep 5
+
+                    # ✅ dashboard.py copy karo
                     docker exec dashboard mkdir -p /app
                     docker cp realtime_dashboard/dashboard.py dashboard:/app/dashboard.py
 

@@ -38,7 +38,6 @@ def save_to_mysql(mysql_cfg, validation_table, run_id, total, passed, failed, ra
         )
         cursor = conn.cursor()
 
-        # 1. Summary table
         cursor.execute(f"""
             INSERT IGNORE INTO {validation_table}
             (run_identifier, checkpoint_name, total_expectations,
@@ -51,7 +50,6 @@ def save_to_mysql(mysql_cfg, validation_table, run_id, total, passed, failed, ra
             json.dumps({"success": success, "total": total, "passed": passed, "failed": failed})
         ))
 
-        # 2. Flat detail table
         for r in results_list:
             exp_type    = r.get("expectation_type", "unknown")
             kwargs      = r.get("kwargs", {})
@@ -109,13 +107,11 @@ def save_failed_records(mysql_cfg, postgres_cfg, staging_table, run_id, results_
         from sqlalchemy import create_engine, text
         import mysql.connector
 
-        # PostgreSQL connection
         pg_engine = create_engine(
             f"postgresql+psycopg2://{postgres_cfg['user']}:{postgres_cfg['password']}"
             f"@{postgres_cfg['host']}:{postgres_cfg['port']}/{postgres_cfg['database']}"
         )
 
-        # MySQL connection
         mysql_conn = mysql.connector.connect(
             host=mysql_cfg.get('host', 'mysql'),
             user=mysql_cfg.get('user', 'admin'),
@@ -123,6 +119,8 @@ def save_failed_records(mysql_cfg, postgres_cfg, staging_table, run_id, results_
             database=mysql_cfg.get('database', 'booking')
         )
         cursor = mysql_conn.cursor(dictionary=True)
+
+        total_inserted = 0
 
         for r in results_list:
             if r.get("success", True):
@@ -132,19 +130,21 @@ def save_failed_records(mysql_cfg, postgres_cfg, staging_table, run_id, results_
             kwargs      = r.get("kwargs", {})
             column_name = kwargs.get("column", "table_level")
 
-            # ✅ Expectation type ke hisaab se PostgreSQL query
             if "unique" in exp_type:
                 failed_reason = "Duplicate value found"
                 pg_query = text(f"""
-                    SELECT booking_id FROM {staging_table}
-                    GROUP BY booking_id HAVING COUNT(*) > 1
+                    SELECT * FROM {staging_table}
+                    WHERE booking_id IN (
+                        SELECT booking_id FROM {staging_table}
+                        GROUP BY booking_id HAVING COUNT(*) > 1
+                    )
                 """)
                 params = {}
 
             elif "null" in exp_type:
                 failed_reason = "Null value found"
                 pg_query = text(f"""
-                    SELECT DISTINCT booking_id FROM {staging_table}
+                    SELECT * FROM {staging_table}
                     WHERE {column_name} IS NULL
                 """)
                 params = {}
@@ -154,7 +154,7 @@ def save_failed_records(mysql_cfg, postgres_cfg, staging_table, run_id, results_
                 failed_reason = f"Value not in set {value_set}"
                 placeholders = ",".join([f":v{i}" for i in range(len(value_set))])
                 pg_query = text(f"""
-                    SELECT DISTINCT booking_id FROM {staging_table}
+                    SELECT * FROM {staging_table}
                     WHERE {column_name} NOT IN ({placeholders})
                 """)
                 params = {f"v{i}": value_set[i] for i in range(len(value_set))}
@@ -163,7 +163,7 @@ def save_failed_records(mysql_cfg, postgres_cfg, staging_table, run_id, results_
                 regex = kwargs.get("regex", "")
                 failed_reason = f"Regex mismatch: {regex}"
                 pg_query = text(f"""
-                    SELECT DISTINCT booking_id FROM {staging_table}
+                    SELECT * FROM {staging_table}
                     WHERE {column_name} !~ :regex
                 """)
                 params = {"regex": regex}
@@ -174,13 +174,13 @@ def save_failed_records(mysql_cfg, postgres_cfg, staging_table, run_id, results_
                 failed_reason = f"Value out of range [{min_val} - {max_val}]"
                 if min_val is not None and max_val is not None:
                     pg_query = text(f"""
-                        SELECT DISTINCT booking_id FROM {staging_table}
+                        SELECT * FROM {staging_table}
                         WHERE {column_name} < :min_val OR {column_name} > :max_val
                     """)
                     params = {"min_val": min_val, "max_val": max_val}
                 elif min_val is not None:
                     pg_query = text(f"""
-                        SELECT DISTINCT booking_id FROM {staging_table}
+                        SELECT * FROM {staging_table}
                         WHERE {column_name} < :min_val
                     """)
                     params = {"min_val": min_val}
@@ -189,58 +189,63 @@ def save_failed_records(mysql_cfg, postgres_cfg, staging_table, run_id, results_
             else:
                 continue
 
-            # ✅ PostgreSQL se poore failed booking_ids lo
+            # ✅ PostgreSQL staging se poore failed records lo
             with pg_engine.connect() as pg_conn:
-                rows = pg_conn.execute(pg_query, params)
-                failed_ids = [row[0] for row in rows]
+                result = pg_conn.execute(pg_query, params)
+                rows = result.mappings().all()
 
-            if not failed_ids:
+            if not rows:
                 print(f"   → {exp_type} | {column_name} | No failed records")
                 continue
 
-            print(f"   → {exp_type} | {column_name} | Failed IDs: {len(failed_ids)}")
+            print(f"   → {exp_type} | {column_name} | Failed records: {len(rows)}")
 
-            # ✅ MySQL customer_booking_final se poora detail lo
-            placeholders = ",".join(["%s"] * len(failed_ids))
-            cursor.execute(f"""
-                SELECT booking_id, customer_id, customer_name, email,
-                       loyalty_tier, loyalty_points, booking_date,
-                       pickup_location, drop_location, car_id, model,
-                       price_per_day, insurance_provider, insurance_coverage,
-                       payment_id, payment_method, payment_amount
-                FROM customer_booking_final
-                WHERE booking_id IN ({placeholders})
-            """, failed_ids)
-
-            customer_rows = cursor.fetchall()
-
-            for row in customer_rows:
-                cursor.execute("""
-                    INSERT INTO validation_failed_records
-                    (run_identifier, expectation_type, column_name,
-                     failed_reason, failed_value,
-                     booking_id, customer_id, customer_name, email,
-                     loyalty_tier, loyalty_points, booking_date,
-                     pickup_location, drop_location, car_id, model,
-                     price_per_day, insurance_provider, insurance_coverage,
-                     payment_id, payment_method, payment_amount)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                """, (
-                    run_id, exp_type, column_name, failed_reason,
-                    row['booking_id'], row['booking_id'], row['customer_id'],
-                    row['customer_name'], row['email'], row['loyalty_tier'],
-                    row['loyalty_points'], row['booking_date'],
-                    row['pickup_location'], row['drop_location'],
-                    row['car_id'], row['model'], row['price_per_day'],
-                    row['insurance_provider'], row['insurance_coverage'],
-                    row['payment_id'], row['payment_method'], row['payment_amount']
-                ))
+            for row in rows:
+                try:
+                    cursor.execute("""
+                        INSERT INTO validation_failed_records
+                        (run_identifier, expectation_type, column_name,
+                         failed_reason, failed_value,
+                         booking_id, customer_id, customer_name, email,
+                         loyalty_tier, loyalty_points, booking_date,
+                         pickup_location, drop_location, car_id, model,
+                         price_per_day, insurance_provider, insurance_coverage,
+                         payment_id, payment_method, payment_amount)
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    """, (
+                        run_id,
+                        exp_type,
+                        column_name,
+                        failed_reason,
+                        str(row.get(column_name, '')),
+                        row.get('booking_id'),
+                        row.get('customer_id'),
+                        row.get('customer_name'),
+                        row.get('email'),
+                        row.get('loyalty_tier'),
+                        row.get('loyalty_points'),
+                        row.get('booking_date'),
+                        row.get('pickup_location'),
+                        row.get('drop_location'),
+                        row.get('car_id'),
+                        row.get('model'),
+                        row.get('price_per_day'),
+                        row.get('insurance_provider'),
+                        row.get('insurance_coverage'),
+                        row.get('payment_id'),
+                        row.get('payment_method'),
+                        row.get('payment_amount')
+                    ))
+                    total_inserted += 1
+                except Exception as row_err:
+                    print(f"   ⚠️ Row insert error: {row_err}")
+                    continue
 
         mysql_conn.commit()
         cursor.close()
         mysql_conn.close()
         pg_engine.dispose()
-        print(f"✅ validation_failed_records save hua!")
+        print(f"✅ validation_failed_records save hua! Total: {total_inserted}")
 
     except Exception as e:
         print(f"⚠️ Warning failed records: {e}")
@@ -321,7 +326,7 @@ def run_quality_checks():
         success = validation_result["success"]
         print("✅ PASSED" if success else "⚠️ VALIDATION ISSUES")
 
-        # JSON save
+        # ✅ JSON save
         reports_dir = os.path.join(ge_project_dir, 'uncommitted', 'validations')
         os.makedirs(reports_dir, exist_ok=True)
         result_filename = os.path.join(
@@ -333,12 +338,12 @@ def run_quality_checks():
             json.dump(result_dict, f)
         print(f"💾 JSON saved: {result_filename}")
 
-        # Stats
+        # ✅ Stats
         stats = result_dict.get("statistics", {})
-        total = stats.get("evaluated_expectations", 0)
+        total  = stats.get("evaluated_expectations", 0)
         passed = stats.get("successful_expectations", 0)
         failed = stats.get("unsuccessful_expectations", 0)
-        rate = stats.get("success_percent", 0.0) or 0.0
+        rate   = stats.get("success_percent", 0.0) or 0.0
         status = "PASSED" if success else "FAILED"
         run_id = datetime.now().strftime('%Y%m%d_%H%M%S')
         results_list = result_dict.get("expectations", [])
@@ -348,7 +353,7 @@ def run_quality_checks():
         # ✅ MySQL mein save karo
         save_to_mysql(mysql_cfg, validation_table, run_id, total, passed, failed, rate, status, success, results_list)
 
-        # ✅ Failed records save karo — PostgreSQL se poore records
+        # ✅ Failed records — PostgreSQL staging se directly
         save_failed_records(mysql_cfg, postgres_cfg, staging_table, run_id, results_list)
 
         return 0

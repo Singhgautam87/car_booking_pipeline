@@ -164,8 +164,6 @@ services:
       - MYSQL_HOST=mysql
     command: 
       tail -f /dev/null
-      sh -c "pip install dash plotly mysql-connector-python pandas sqlalchemy --quiet &&
-             python /app/dashboard.py"
     depends_on:
       - mysql
     restart: "no"

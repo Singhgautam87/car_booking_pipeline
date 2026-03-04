@@ -2,13 +2,13 @@ pipeline {
     agent any
 
     environment {
-        COMPOSE_FILE = "docker-compose.yml"
+        COMPOSE_FILE    = "docker-compose.yml"
         COMPOSE_PROJECT = "car-booking-pipeline"
-        SPARK_SUBMIT = "docker exec spark-master /opt/spark/bin/spark-submit"
-        SPARK_PACKAGES = "org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.2,org.postgresql:postgresql:42.5.0,mysql:mysql-connector-java:8.0.33,org.apache.hadoop:hadoop-aws:3.3.4,io.delta:delta-core_2.12:2.4.0"
-        DELTA_CONF = "--conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog"
-        S3_CONF = "--conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 --conf spark.hadoop.fs.s3a.access.key=admin --conf spark.hadoop.fs.s3a.secret.key=admin123 --conf spark.hadoop.fs.s3a.path.style.access=true --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem"
-        SPARK_MEMORY = "--driver-memory 2g --executor-memory 2g --conf spark.driver.maxResultSize=1g"
+        SPARK_SUBMIT    = "docker exec spark-master /opt/spark/bin/spark-submit"
+        SPARK_PACKAGES  = "org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.2,org.postgresql:postgresql:42.5.0,mysql:mysql-connector-java:8.0.33,org.apache.hadoop:hadoop-aws:3.3.4,io.delta:delta-core_2.12:2.4.0"
+        DELTA_CONF      = "--conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog"
+        S3_CONF         = "--conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 --conf spark.hadoop.fs.s3a.access.key=admin --conf spark.hadoop.fs.s3a.secret.key=admin123 --conf spark.hadoop.fs.s3a.path.style.access=true --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem"
+        SPARK_MEMORY    = "--driver-memory 2g --executor-memory 2g --conf spark.driver.maxResultSize=1g"
     }
 
     stages {
@@ -73,6 +73,10 @@ pipeline {
                     # ✅ Verify
                     echo "--- Config verify ---"
                     docker exec spark-master cat /opt/config/config.json
+
+                    # ✅ Pipeline Run ID generate karo (SLA tracking)
+                    echo "PIPELINE_RUN_ID=$(date +%Y%m%d_%H%M%S)" >> /tmp/pipeline_env
+                    cat /tmp/pipeline_env
                 '''
             }
         }
@@ -112,6 +116,10 @@ pipeline {
         stage('Kafka Producer') {
             steps {
                 sh '''
+                    # ✅ SLA: stage start time
+                    STAGE_START=$(date +%s)
+                    RUN_ID=$(date +%Y%m%d_%H%M%S)
+
                     sleep 5
                     for i in 1 2 3 4 5; do
                         echo "Creating Kafka topic (attempt $i/5)..."
@@ -134,6 +142,15 @@ pipeline {
 
                     sleep 60
                     docker exec kafka kafka-topics --describe --topic car-bookings --bootstrap-server localhost:9092
+
+                    # ✅ SLA: record duration
+                    STAGE_END=$(date +%s)
+                    DURATION=$((STAGE_END - STAGE_START))
+                    docker exec mysql mysql -u admin -padmin booking -e "
+                        INSERT INTO pipeline_run_stats (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
+                        VALUES ('${RUN_ID}', 'kafka_producer', 0, ${DURATION}, 'SUCCESS', NOW());
+                    "
+                    echo "✅ SLA recorded: kafka_producer = ${DURATION}s"
                 '''
             }
         }
@@ -159,9 +176,20 @@ pipeline {
                 retry(3) {
                     timeout(time: 15, unit: 'MINUTES') {
                         sh '''
+                            STAGE_START=$(date +%s)
+                            RUN_ID=$(date +%Y%m%d_%H%M%S)
+
                             $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
                                 /opt/spark-apps/jobs/ingest_stream.py
                             echo "✅ Raw data Delta Lake mein!"
+
+                            STAGE_END=$(date +%s)
+                            DURATION=$((STAGE_END - STAGE_START))
+                            docker exec mysql mysql -u admin -padmin booking -e "
+                                INSERT INTO pipeline_run_stats (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
+                                VALUES ('${RUN_ID}', 'spark_ingest', 0, ${DURATION}, 'SUCCESS', NOW());
+                            "
+                            echo "✅ SLA recorded: spark_ingest = ${DURATION}s"
                         '''
                     }
                 }
@@ -172,6 +200,9 @@ pipeline {
             steps {
                 timeout(time: 20, unit: 'MINUTES') {
                     sh '''
+                        STAGE_START=$(date +%s)
+                        RUN_ID=$(date +%Y%m%d_%H%M%S)
+
                         $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
                             /opt/spark-apps/jobs/transform_customer.py
                         echo "✅ Customer done"
@@ -187,6 +218,14 @@ pipeline {
                         $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
                             /opt/spark-apps/jobs/transform_payments.py
                         echo "✅ Payments done"
+
+                        STAGE_END=$(date +%s)
+                        DURATION=$((STAGE_END - STAGE_START))
+                        docker exec mysql mysql -u admin -padmin booking -e "
+                            INSERT INTO pipeline_run_stats (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
+                            VALUES ('${RUN_ID}', 'spark_transform', 0, ${DURATION}, 'SUCCESS', NOW());
+                        "
+                        echo "✅ SLA recorded: spark_transform = ${DURATION}s"
                     '''
                 }
             }
@@ -196,9 +235,20 @@ pipeline {
             steps {
                 timeout(time: 15, unit: 'MINUTES') {
                     sh '''
+                        STAGE_START=$(date +%s)
+                        RUN_ID=$(date +%Y%m%d_%H%M%S)
+
                         $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
                             /opt/spark-apps/jobs/merge.py
                         echo "✅ Data merged!"
+
+                        STAGE_END=$(date +%s)
+                        DURATION=$((STAGE_END - STAGE_START))
+                        docker exec mysql mysql -u admin -padmin booking -e "
+                            INSERT INTO pipeline_run_stats (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
+                            VALUES ('${RUN_ID}', 'spark_merge', 0, ${DURATION}, 'SUCCESS', NOW());
+                        "
+                        echo "✅ SLA recorded: spark_merge = ${DURATION}s"
                     '''
                 }
             }
@@ -208,9 +258,24 @@ pipeline {
             steps {
                 timeout(time: 15, unit: 'MINUTES') {
                     sh '''
+                        STAGE_START=$(date +%s)
+                        RUN_ID=$(date +%Y%m%d_%H%M%S)
+
                         $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
                             /opt/spark-apps/jobs/write_to_postgres.py
                         echo "✅ PostgreSQL staging ready!"
+
+                        # ✅ Record count bhi save karo
+                        RECORD_COUNT=$(docker exec postgres psql -U admin -d booking -t -c \
+                            "SELECT COUNT(*) FROM customer_booking_staging;" | tr -d ' ')
+
+                        STAGE_END=$(date +%s)
+                        DURATION=$((STAGE_END - STAGE_START))
+                        docker exec mysql mysql -u admin -padmin booking -e "
+                            INSERT INTO pipeline_run_stats (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
+                            VALUES ('${RUN_ID}', 'write_postgres', ${RECORD_COUNT}, ${DURATION}, 'SUCCESS', NOW());
+                        "
+                        echo "✅ SLA recorded: write_postgres = ${DURATION}s | records = ${RECORD_COUNT}"
                     '''
                 }
             }
@@ -219,6 +284,9 @@ pipeline {
         stage('Data Validation') {
             steps {
                 sh '''
+                    STAGE_START=$(date +%s)
+                    RUN_ID=$(date +%Y%m%d_%H%M%S)
+
                     echo "=== Data Validation Setup ==="
 
                     docker exec great_expectations mkdir -p /ge/jobs
@@ -241,26 +309,29 @@ pipeline {
                     echo "Running validation..."
                     docker exec great_expectations python /ge/jobs/run_ge.py
 
-                    # ✅ Correct column names se verify karo
-                    echo "=== Validation Results in MySQL ==="
-                    docker exec mysql mysql -u admin -padmin booking -e "SELECT run_identifier, total_expectations, passed_expectations, failed_expectations, success_rate FROM validation_results;"
-                    docker exec mysql mysql -u admin -padmin booking -e "SELECT COUNT(*) as failed_records FROM validation_failed_records;"
+                    # ✅ Verify
+                    echo "=== Validation Results ==="
+                    docker exec mysql mysql -u admin -padmin booking -e "
+                        SELECT run_identifier, total_expectations,
+                               passed_expectations, failed_expectations, success_rate
+                        FROM validation_results;
+                    "
+                    docker exec mysql mysql -u admin -padmin booking -e "
+                        SELECT COUNT(*) as failed_records FROM validation_failed_records;
+                    "
 
+                    # ✅ SLA record
+                    FAILED_COUNT=$(docker exec mysql mysql -u admin -padmin booking -sN -e \
+                        "SELECT COUNT(*) FROM validation_failed_records;" | tr -d ' ')
+                    STAGE_END=$(date +%s)
+                    DURATION=$((STAGE_END - STAGE_START))
+                    docker exec mysql mysql -u admin -padmin booking -e "
+                        INSERT INTO pipeline_run_stats (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
+                        VALUES ('${RUN_ID}', 'data_validation', ${FAILED_COUNT}, ${DURATION}, 'SUCCESS', NOW());
+                    "
+                    echo "✅ SLA recorded: data_validation = ${DURATION}s | failed_records = ${FAILED_COUNT}"
                     echo "✅ Validation complete!"
                 '''
-            }
-        }
-
-        stage('Load MySQL') {
-            steps {
-                sh 'docker exec -u root spark-master pip install mysql-connector-python --quiet'
-                timeout(time: 15, unit: 'MINUTES') {
-                    sh '''
-                        $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
-                            /opt/spark-apps/jobs/write_to_mysql.py
-                        echo "✅ MySQL load complete!"
-                    '''
-                }
             }
         }
 
@@ -279,7 +350,7 @@ pipeline {
                     docker cp realtime_dashboard/dashboard.py dashboard:/app/dashboard.py
 
                     # ✅ Dependencies install karo
-                    docker exec dashboard pip install dash plotly mysql-connector-python pandas sqlalchemy --quiet
+                    docker exec dashboard pip install dash plotly mysql-connector-python pandas sqlalchemy psycopg2-binary --quiet
 
                     # ✅ Background mein run karo
                     docker exec -d dashboard python /app/dashboard.py
@@ -310,10 +381,10 @@ pipeline {
     post {
         success {
             echo "✅ Pipeline complete!"
-            echo "📊 Dashboard: http://localhost:8050"
-            echo "📋 Kafka UI: http://localhost:8081"
-            echo "🗄️ MinIO: http://localhost:9001"
-            echo "⚡ Spark UI: http://localhost:8082"
+            echo "📊 Dashboard:  http://localhost:8050"
+            echo "📋 Kafka UI:   http://localhost:8081"
+            echo "🗄️  MinIO:      http://localhost:9001"
+            echo "⚡ Spark UI:   http://localhost:8082"
         }
         failure {
             sh '''

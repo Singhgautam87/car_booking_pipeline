@@ -241,9 +241,9 @@ pipeline {
                     echo "Running validation..."
                     docker exec great_expectations python /ge/jobs/run_ge.py
 
-                    # ✅ Validation output verify karo
+                    # ✅ Correct column names se verify karo
                     echo "=== Validation Results in MySQL ==="
-                    docker exec mysql mysql -u admin -padmin booking -e "SELECT run_identifier, total_expectations, passed, failed, success_rate FROM validation_results;"
+                    docker exec mysql mysql -u admin -padmin booking -e "SELECT run_identifier, total_expectations, passed_expectations, failed_expectations, success_rate FROM validation_results;"
                     docker exec mysql mysql -u admin -padmin booking -e "SELECT COUNT(*) as failed_records FROM validation_failed_records;"
 
                     echo "✅ Validation complete!"

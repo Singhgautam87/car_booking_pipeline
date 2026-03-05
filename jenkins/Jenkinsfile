@@ -29,7 +29,7 @@ pipeline {
                     docker volume rm car-booking-pipeline_postgres_data || true
                     docker image prune -f || true
                     rm -rf /tmp/ge_* /tmp/spark_* /tmp/producer.py /tmp/car_booking.json || true
-                    echo "✅ Cleanup complete! Jenkins is still running 😎"
+                    echo "✅ Cleanup complete!"
                 '''
             }
         }
@@ -116,7 +116,6 @@ pipeline {
         stage('Kafka Producer') {
             steps {
                 sh '''
-                    # ✅ SLA: stage start time
                     STAGE_START=$(date +%s)
                     RUN_ID=$(date +%Y%m%d_%H%M%S)
 
@@ -143,7 +142,6 @@ pipeline {
                     sleep 60
                     docker exec kafka kafka-topics --describe --topic car-bookings --bootstrap-server localhost:9092
 
-                    # ✅ SLA: record duration
                     STAGE_END=$(date +%s)
                     DURATION=$((STAGE_END - STAGE_START))
                     docker exec mysql mysql -u admin -padmin booking -e "
@@ -265,7 +263,6 @@ pipeline {
                             /opt/spark-apps/jobs/write_to_postgres.py
                         echo "✅ PostgreSQL staging ready!"
 
-                        # ✅ Record count bhi save karo
                         RECORD_COUNT=$(docker exec postgres psql -U admin -d booking -t -c \
                             "SELECT COUNT(*) FROM customer_booking_staging;" | tr -d ' ')
 
@@ -297,7 +294,6 @@ pipeline {
                     docker cp great_expectations/great_expectations/expectations/customer_booking_suite.json \
                         great_expectations:/ge/great_expectations/expectations/customer_booking_suite.json
 
-                    # ✅ MySQL + dependencies install karo GE container mein
                     docker exec great_expectations pip install mysql-connector-python psycopg2-binary sqlalchemy --quiet
 
                     docker exec mysql mysql -u admin -padmin booking -e "
@@ -309,7 +305,6 @@ pipeline {
                     echo "Running validation..."
                     docker exec great_expectations python /ge/jobs/run_ge.py
 
-                    # ✅ Verify
                     echo "=== Validation Results ==="
                     docker exec mysql mysql -u admin -padmin booking -e "
                         SELECT run_identifier, total_expectations,
@@ -320,7 +315,6 @@ pipeline {
                         SELECT COUNT(*) as failed_records FROM validation_failed_records;
                     "
 
-                    # ✅ SLA record
                     FAILED_COUNT=$(docker exec mysql mysql -u admin -padmin booking -sN -e \
                         "SELECT COUNT(*) FROM validation_failed_records;" | tr -d ' ')
                     STAGE_END=$(date +%s)
@@ -335,44 +329,35 @@ pipeline {
             }
         }
 
+        // ✅ FIX: pip install hata diya — Dockerfile mein pre-installed hai
         stage('Start Dashboard') {
             steps {
                 sh '''
                     docker rm -f dashboard || true
 
+                    # ✅ Dockerfile se image build karo (sirf pehli baar slow, baad mein cached)
+                    docker-compose -p ${COMPOSE_PROJECT} build dashboard
+
+                    # ✅ Container start karo — seedha python dashboard.py chalega
                     docker-compose -p ${COMPOSE_PROJECT} up -d dashboard
 
-                    # ✅ Container running hone ka wait karo
-                    sleep 5
-
-                    # ✅ dashboard.py copy karo
-                    docker exec dashboard mkdir -p /app
-                    docker cp realtime_dashboard/dashboard.py dashboard:/app/dashboard.py
-
-                    # ✅ Dependencies install karo
-                    docker exec dashboard pip install dash plotly mysql-connector-python pandas sqlalchemy psycopg2-binary --quiet
-
-                    # ✅ Background mein run karo
-                    docker exec -d dashboard python /app/dashboard.py
-
                     echo "Waiting for dashboard to start..."
-                    sleep 30
+                    sleep 15
 
-                    # ✅ Dashboard logs check karo
                     echo "=== Dashboard Logs ==="
-                    docker logs dashboard --tail 20 || true
+                    docker logs dashboard --tail 30 || true
 
-                    # ✅ Container ke andar se health check
+                    # ✅ Health check
                     for i in 1 2 3 4 5; do
                         if docker exec dashboard curl -s http://localhost:8050 >/dev/null 2>&1; then
-                            echo "✅ Dashboard is up!"
+                            echo "✅ Dashboard is up at http://localhost:8050"
                             break
                         fi
-                        echo "Waiting for dashboard... $i/5"
+                        echo "Waiting... $i/5"
                         sleep 10
                     done
 
-                    echo "✅ Open in browser: http://localhost:8050"
+                    echo "✅ Dashboard ready: http://localhost:8050"
                 '''
             }
         }

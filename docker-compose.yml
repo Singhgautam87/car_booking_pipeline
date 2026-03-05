@@ -154,18 +154,16 @@ services:
       - car-booking-network
 
   dashboard:
-    image: python:3.10-slim
+    build: ./realtime_dashboard   
     container_name: dashboard
     ports:
       - "8050:8050"
-    volumes:
-      - ./realtime_dashboard:/app
     environment:
       - MYSQL_HOST=mysql
-    command: 
-      tail -f /dev/null
+      - POSTGRES_HOST=postgres
     depends_on:
       - mysql
+      - postgres
     restart: "no"
     networks:
       - car-booking-network

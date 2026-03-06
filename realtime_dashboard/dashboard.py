@@ -1,8 +1,3 @@
-"""
-Car Booking Pipeline Dashboard
-Architecture: dcc.Store → tab-specific callbacks → no unnecessary re-renders
-Stack: Kafka → Spark → Delta Lake → PostgreSQL → Dash
-"""
 import os
 import dash
 from dash import dcc, html, Input, Output, State, dash_table, ctx
@@ -457,11 +452,13 @@ def render_overview(bk, sla, val, loy_f, pay_f, ins_f, clr):
             fillcolor="rgba(0,255,136,0.07)",
         ))
         fig_spark.update_layout(
-            **{**CBASE,"margin":dict(l=0,r=0,t=28,b=0)},
+            **{**CBASE,
+               "margin":dict(l=0,r=0,t=28,b=0),
+               "plot_bgcolor":"rgba(0,0,0,0)",
+               "paper_bgcolor":"rgba(0,0,0,0)"},
             title="revenue · daily", height=110,
             xaxis={"visible":False,"gridcolor":"transparent"},
             yaxis={"visible":False,"gridcolor":"transparent"},
-            plot_bgcolor="rgba(0,0,0,0)",
         )
     else:
         fig_spark = empty("revenue — no data"); fig_spark.update_layout(height=110)

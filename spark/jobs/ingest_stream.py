@@ -10,32 +10,13 @@ minio_cfg   = config.get_minio_config()
 kafka_cfg   = config.get_kafka_config()
 delta_paths = config.get_delta_paths()
 
-# ── Iceberg paths ─────────────────────────────────────────
-RAW_PATH       = delta_paths['raw'].replace("s3a://delta", "s3a://iceberg")
-RAW_CARS_PATH  = delta_paths['raw_cars'].replace("s3a://delta", "s3a://iceberg")
-RAW_PAY_PATH   = delta_paths['raw_payments'].replace("s3a://delta", "s3a://iceberg")
-
 spark = SparkSession.builder \
     .appName("KafkaIngest") \
-    .config("spark.sql.extensions",
-            "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions") \
-    .config("spark.sql.catalog.spark_catalog",
-            "org.apache.iceberg.spark.SparkSessionCatalog") \
-    .config("spark.sql.catalog.spark_catalog.type", "hadoop") \
-    .config("spark.sql.catalog.spark_catalog.warehouse", "s3a://iceberg/warehouse") \
-    .config("spark.sql.catalog.local",
-            "org.apache.iceberg.spark.SparkCatalog") \
-    .config("spark.sql.catalog.local.type", "hadoop") \
-    .config("spark.sql.catalog.local.warehouse", "s3a://iceberg/warehouse") \
     .config("spark.hadoop.fs.s3a.endpoint",          minio_cfg['endpoint']) \
     .config("spark.hadoop.fs.s3a.access.key",        minio_cfg['access_key']) \
     .config("spark.hadoop.fs.s3a.secret.key",        minio_cfg['secret_key']) \
     .config("spark.hadoop.fs.s3a.path.style.access", str(minio_cfg['path_style']).lower()) \
-    .config("spark.hadoop.fs.s3a.impl",
-            "org.apache.hadoop.fs.s3a.S3AFileSystem") \
     .getOrCreate()
-
-spark.sparkContext.setLogLevel("WARN")
 
 schema = StructType([
     StructField("booking_id",   StringType()),
@@ -82,26 +63,21 @@ df = spark.readStream \
     .option("subscribe",               kafka_cfg['topic']) \
     .option("startingOffsets",         kafka_cfg['starting_offsets']) \
     .option("failOnDataLoss",          "false") \
-    .option("kafka.metadata.max.age.ms",    kafka_cfg['max_age_ms']) \
-    .option("kafka.session.timeout.ms",     kafka_cfg['session_timeout_ms']) \
+    .option("kafka.metadata.max.age.ms",  kafka_cfg['max_age_ms']) \
+    .option("kafka.session.timeout.ms",   kafka_cfg['session_timeout_ms']) \
     .load()
 
 parsed_df = df.select(
     from_json(col("value").cast("string"), schema).alias("data")
 ).select("data.*")
 
-# ── Raw booking + customer ────────────────────────────────
 raw_df = parsed_df.select(
-    col("booking_id"),
-    col("booking_date"),
-    col("customer"),
-    col("booking_details")
+    col("booking_id"), col("booking_date"),
+    col("customer"), col("booking_details")
 )
 
-# ── Cars explode + flatten ────────────────────────────────
 raw_cars_df = parsed_df.select(
-    col("booking_id"),
-    explode(col("cars")).alias("car")
+    col("booking_id"), explode(col("cars")).alias("car")
 ).select(
     col("booking_id"),
     col("car.car_id").alias("car_id"),
@@ -111,10 +87,8 @@ raw_cars_df = parsed_df.select(
     col("car.insurance.coverage_type").alias("insurance_coverage")
 )
 
-# ── Payments explode + flatten ────────────────────────────
 raw_payments_df = parsed_df.select(
-    col("booking_id"),
-    explode(col("payments")).alias("payment")
+    col("booking_id"), explode(col("payments")).alias("payment")
 ).select(
     col("booking_id"),
     col("payment.payment_id").alias("payment_id"),
@@ -122,30 +96,26 @@ raw_payments_df = parsed_df.select(
     col("payment.amount").alias("payment_amount")
 )
 
-# ── Write streams → Iceberg format ───────────────────────
 raw_query = raw_df.writeStream \
-    .format("iceberg") \
-    .option("path",               RAW_PATH) \
+    .format("delta") \
+    .option("path",               delta_paths['raw']) \
     .option("checkpointLocation", "/tmp/checkpoint_raw") \
-    .outputMode("append") \
-    .start()
+    .outputMode("append").start()
 
 cars_query = raw_cars_df.writeStream \
-    .format("iceberg") \
-    .option("path",               RAW_CARS_PATH) \
+    .format("delta") \
+    .option("path",               delta_paths['raw_cars']) \
     .option("checkpointLocation", "/tmp/checkpoint_raw_cars") \
-    .outputMode("append") \
-    .start()
+    .outputMode("append").start()
 
 payments_query = raw_payments_df.writeStream \
-    .format("iceberg") \
-    .option("path",               RAW_PAY_PATH) \
+    .format("delta") \
+    .option("path",               delta_paths['raw_payments']) \
     .option("checkpointLocation", "/tmp/checkpoint_raw_payments") \
-    .outputMode("append") \
-    .start()
+    .outputMode("append").start()
 
 raw_query.awaitTermination(timeout=120)
 cars_query.awaitTermination(timeout=120)
 payments_query.awaitTermination(timeout=120)
 
-print("✅ All streams written to Iceberg!")
+print("✅ All streams written to Delta Lake!")

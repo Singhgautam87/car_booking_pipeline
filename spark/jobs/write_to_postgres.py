@@ -9,34 +9,19 @@ postgres_cfg = config.get_postgres_config()
 delta_paths  = config.get_delta_paths()
 tables       = config.get_tables()
 
-MERGED_PATH = delta_paths['merged'].replace("s3a://delta", "s3a://iceberg")
-
 spark = SparkSession.builder \
     .appName("WritePostgres") \
-    .config("spark.sql.extensions",
-            "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions") \
-    .config("spark.sql.catalog.spark_catalog",
-            "org.apache.iceberg.spark.SparkSessionCatalog") \
-    .config("spark.sql.catalog.spark_catalog.type", "hadoop") \
-    .config("spark.sql.catalog.spark_catalog.warehouse", "s3a://iceberg/warehouse") \
     .config("spark.hadoop.fs.s3a.endpoint",          minio_cfg['endpoint']) \
     .config("spark.hadoop.fs.s3a.access.key",        minio_cfg['access_key']) \
     .config("spark.hadoop.fs.s3a.secret.key",        minio_cfg['secret_key']) \
     .config("spark.hadoop.fs.s3a.path.style.access", str(minio_cfg['path_style']).lower()) \
-    .config("spark.hadoop.fs.s3a.impl",
-            "org.apache.hadoop.fs.s3a.S3AFileSystem") \
     .config("spark.jars", "/opt/spark/jars/postgresql-42.6.0.jar") \
     .getOrCreate()
 
-spark.sparkContext.setLogLevel("WARN")
-
-# ── Read from Iceberg ─────────────────────────────────────
-merged_df = spark.read.format("iceberg").load(MERGED_PATH)
-
+merged_df = spark.read.format("delta").load(delta_paths['merged'])
 total = merged_df.count()
-print(f"📦 Iceberg se {total:,} records read kiye")
+print(f"📦 Delta Lake se {total:,} records read kiye")
 
-# ── Write to PostgreSQL staging ───────────────────────────
 merged_df.write \
     .format("jdbc") \
     .option("url",      config.get_postgres_jdbc_url()) \
@@ -47,5 +32,4 @@ merged_df.write \
     .mode("overwrite") \
     .save()
 
-print(f"✅ Data written to PostgreSQL staging: {tables['staging']}")
-print(f"   Total records: {total:,}")
+print(f"✅ Data written to PostgreSQL: {tables['staging']} | records: {total:,}")

@@ -387,9 +387,9 @@ def render_overview(df, validation_df, sla_df, filter_badge):
                             color_discrete_sequence=[ACCENT2])
         fig_spark.update_traces(line_color=ACCENT2, fillcolor="rgba(63,185,80,0.1)",
                                 line_width=1.5)
-        fig_spark.update_layout(**CHART_BASE, title="Revenue Trend",
-                                xaxis={"visible": False}, yaxis={"visible": False},
-                                margin=dict(l=0, r=0, t=30, b=0))
+        _spark_layout = {**CHART_BASE, "margin": dict(l=0, r=0, t=30, b=0)}
+        fig_spark.update_layout(**_spark_layout, title="Revenue Trend",
+                                xaxis={"visible": False}, yaxis={"visible": False})
     else:
         fig_spark = empty_fig("Revenue Trend")
 

@@ -5,8 +5,10 @@ pipeline {
         COMPOSE_FILE    = "docker-compose.yml"
         COMPOSE_PROJECT = "car-booking-pipeline"
         SPARK_SUBMIT    = "docker exec spark-master /opt/spark/bin/spark-submit"
-        SPARK_PACKAGES  = "org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.2,org.postgresql:postgresql:42.5.0,mysql:mysql-connector-java:8.0.33,org.apache.hadoop:hadoop-aws:3.3.4,io.delta:delta-core_2.12:2.4.0"
-        DELTA_CONF      = "--conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog"
+        // ✅ Delta → Iceberg package
+        SPARK_PACKAGES  = "org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.2,org.postgresql:postgresql:42.5.0,mysql:mysql-connector-java:8.0.33,org.apache.hadoop:hadoop-aws:3.3.4,org.apache.iceberg:iceberg-spark-runtime-3.4_2.12:1.4.2"
+        // ✅ Iceberg extensions
+        DELTA_CONF      = "--conf spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions --conf spark.sql.catalog.spark_catalog=org.apache.iceberg.spark.SparkSessionCatalog --conf spark.sql.catalog.spark_catalog.type=hadoop --conf spark.sql.catalog.spark_catalog.warehouse=s3a://iceberg/warehouse"
         S3_CONF         = "--conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 --conf spark.hadoop.fs.s3a.access.key=admin --conf spark.hadoop.fs.s3a.secret.key=admin123 --conf spark.hadoop.fs.s3a.path.style.access=true --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem"
         SPARK_MEMORY    = "--driver-memory 2g --executor-memory 2g --conf spark.driver.maxResultSize=1g"
     }
@@ -156,13 +158,19 @@ pipeline {
         stage('Setup MinIO Buckets') {
             steps {
                 sh '''
+                    # ✅ Iceberg warehouse bucket
                     docker exec minio sh -c "
-                        rm -rf /data/delta &&
-                        mkdir -p /data/delta/raw &&
-                        mkdir -p /data/delta/transformed &&
-                        mkdir -p /data/delta/curated
+                        rm -rf /data/iceberg &&
+                        mkdir -p /data/iceberg/warehouse/raw/booking &&
+                        mkdir -p /data/iceberg/warehouse/raw/cars &&
+                        mkdir -p /data/iceberg/warehouse/raw/payments &&
+                        mkdir -p /data/iceberg/warehouse/transformed/customer &&
+                        mkdir -p /data/iceberg/warehouse/transformed/booking &&
+                        mkdir -p /data/iceberg/warehouse/transformed/cars &&
+                        mkdir -p /data/iceberg/warehouse/transformed/payments &&
+                        mkdir -p /data/iceberg/warehouse/curated/customer_booking
                     "
-                    echo "✅ MinIO buckets ready!"
+                    echo "✅ Iceberg MinIO buckets ready!"
                 '''
             }
         }
@@ -329,16 +337,20 @@ pipeline {
             }
         }
 
-        // ✅ FIX: pip install hata diya — Dockerfile mein pre-installed hai
+        // ✅ PERMANENT FIX:
+        // - Dockerfile mein sab packages pre-installed
+        // - dashboard.py Dockerfile COPY se bake hoti hai
+        // - --no-cache se latest dashboard.py hamesha use hoti hai
+        // - No runtime pip install, no docker cp
         stage('Start Dashboard') {
             steps {
                 sh '''
                     docker rm -f dashboard || true
 
-                    # ✅ Dockerfile se image build karo (sirf pehli baar slow, baad mein cached)
-                    docker-compose -p ${COMPOSE_PROJECT} build dashboard
+                    # ✅ Fresh build — latest dashboard.py hamesha bake hogi
+                    docker-compose -p ${COMPOSE_PROJECT} build --no-cache dashboard
 
-                    # ✅ Container start karo — seedha python dashboard.py chalega
+                    # ✅ Start karo
                     docker-compose -p ${COMPOSE_PROJECT} up -d dashboard
 
                     echo "Waiting for dashboard to start..."

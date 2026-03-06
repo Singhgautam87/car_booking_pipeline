@@ -31,17 +31,16 @@
     "jdbc_url": "jdbc:mysql://mysql:3306/booking"
   },
   "delta_paths": {
-    "raw":                  "s3a://delta/raw/booking",
-    "raw_cars":             "s3a://delta/raw/cars",
-    "raw_payments":         "s3a://delta/raw/payments",
-    "customer_transformed": "s3a://delta/transformed/customer",
-    "booking_transformed":  "s3a://delta/transformed/booking",
-    "cars_transformed":     "s3a://delta/transformed/cars",
-    "payments_transformed": "s3a://delta/transformed/payments",
-    "merged":               "s3a://delta/curated/customer_booking"
+    "raw":                  "s3a://iceberg/warehouse/raw/booking",
+    "raw_cars":             "s3a://iceberg/warehouse/raw/cars",
+    "raw_payments":         "s3a://iceberg/warehouse/raw/payments",
+    "customer_transformed": "s3a://iceberg/warehouse/transformed/customer",
+    "booking_transformed":  "s3a://iceberg/warehouse/transformed/booking",
+    "cars_transformed":     "s3a://iceberg/warehouse/transformed/cars",
+    "payments_transformed": "s3a://iceberg/warehouse/transformed/payments",
+    "merged":               "s3a://iceberg/warehouse/curated/customer_booking"
   },
   "tables": {
-    "staging":     "customer_booking_staging",
-    "final_mysql": "customer_booking_final"
+    "staging": "customer_booking_staging"
   }
 }

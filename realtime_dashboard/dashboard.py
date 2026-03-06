@@ -447,18 +447,22 @@ def render_overview(bk, sla, val, loy_f, pay_f, ins_f, clr):
         rd = df.groupby("booking_date")["payment_amount"].sum().reset_index()
         fig_spark = go.Figure()
         fig_spark.add_trace(go.Scatter(
-            x=rd["booking_date"], y=rd["payment_amount"], mode="lines",
-            fill="tozeroy", line=dict(color=C2,width=2),
-            fillcolor="rgba(0,255,136,0.07)",
+            x=rd["booking_date"], y=rd["payment_amount"],
+            mode="lines",
+            fill="tozeroy",
+            line=dict(color="#00ff88", width=2),
+            fillcolor="white",
+            opacity=0.05,
         ))
         fig_spark.update_layout(
-            **{**CBASE,
-               "margin":dict(l=0,r=0,t=28,b=0),
-               "plot_bgcolor":"rgba(0,0,0,0)",
-               "paper_bgcolor":"rgba(0,0,0,0)"},
-            title="revenue · daily", height=110,
-            xaxis={"visible":False,"gridcolor":"transparent"},
-            yaxis={"visible":False,"gridcolor":"transparent"},
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(color="#cdd9e5", family="'JetBrains Mono',monospace", size=11),
+            title=dict(text="revenue · daily", font=dict(color="#00d4ff", size=12)),
+            margin=dict(l=0, r=0, t=28, b=0),
+            height=110,
+            xaxis=dict(visible=False, gridcolor="rgba(0,0,0,0)"),
+            yaxis=dict(visible=False, gridcolor="rgba(0,0,0,0)"),
         )
     else:
         fig_spark = empty("revenue — no data"); fig_spark.update_layout(height=110)
@@ -694,8 +698,9 @@ def render_observability(bk, loy_f, pay_f, ins_f, clr):
         fig_vol.add_trace(go.Scatter(
             x=list(dly["date"])+list(dly["date"])[::-1],
             y=list(dly["upper"])+list(dly["lower"])[::-1],
-            fill="toself", fillcolor="rgba(0,212,255,0.05)",
-            line=dict(color="rgba(0,0,0,0)"), name="2σ band"))
+            fill="toself", fillcolor="rgba(0,0,0,0)",
+            line=dict(color="rgba(0,0,0,0)"), name="2σ band",
+            opacity=0.1))
         fig_vol.add_trace(go.Bar(x=dly["date"],y=dly["count"],
                                   name="records",marker_color=C1,opacity=0.7))
         fig_vol.add_trace(go.Scatter(x=dly["date"],y=dly["avg7"],

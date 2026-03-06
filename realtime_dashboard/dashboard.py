@@ -72,9 +72,10 @@ CBASE = dict(
     font=dict(color=TX, family=MONO, size=11),
     margin=dict(l=50, r=20, t=46, b=38),
     title_font=dict(color=C1, size=12, family=MONO),
-    xaxis=dict(gridcolor=GR, zerolinecolor=GR, color=SUB),
-    yaxis=dict(gridcolor=GR, zerolinecolor=GR, color=SUB),
 )
+
+# Default axis — use where no custom axis needed
+AXIS = dict(gridcolor=GR, zerolinecolor=GR, color=SUB)
 
 # ================================================================
 # UI HELPERS
@@ -150,7 +151,7 @@ def empty(msg="no data"):
     fig.add_annotation(text=f"[ {msg} ]", xref="paper", yref="paper",
                        x=0.5, y=0.5, showarrow=False,
                        font={"color":MUT,"size":12,"family":MONO})
-    fig.update_layout(**CBASE, height=220)
+    fig.update_layout(**CBASE, xaxis=AXIS, yaxis=AXIS, height=220)
     return fig
 
 def loading(children):
@@ -428,6 +429,10 @@ def switch_tab(ov,an,ml,pi,qu,de, current):
      Input("clear-filters",   "n_clicks")],
 )
 def render_overview(bk, sla, val, loy_f, pay_f, ins_f, clr):
+    if not bk:
+        return html.Div("[ loading data... ]",
+                        style={"color":MUT,"fontFamily":MONO,"fontSize":"12px",
+                               "padding":"60px","textAlign":"center"})
     df_raw  = safe_df(bk)
     sla_df  = safe_df(sla)
     val_df  = safe_df(val)
@@ -474,6 +479,7 @@ def render_overview(bk, sla, val, loy_f, pay_f, ins_f, clr):
             textfont=dict(color=SUB,size=9,family=MONO),
         ))
         fig_cars.update_layout(**CBASE, title="top cars · revenue", height=260,
+                               xaxis=AXIS,
                                yaxis={"categoryorder":"total ascending"})
     else:
         fig_cars = empty("top cars — no data"); fig_cars.update_layout(height=260)
@@ -493,7 +499,7 @@ def render_overview(bk, sla, val, loy_f, pay_f, ins_f, clr):
         fig_heat = px.density_heatmap(ht, x="Month", y="Day", z="Count",
                                        title="heatmap · month × day of week",
                                        color_continuous_scale=[[0,BG],[0.4,C1],[1,C4]])
-        fig_heat.update_layout(**CBASE, coloraxis_showscale=False, height=250)
+        fig_heat.update_layout(**CBASE, xaxis=AXIS, yaxis=AXIS, coloraxis_showscale=False, height=250)
     else:
         fig_heat = empty("heatmap — no data"); fig_heat.update_layout(height=250)
 
@@ -548,6 +554,10 @@ def render_overview(bk, sla, val, loy_f, pay_f, ins_f, clr):
      Input("clear-filters",   "n_clicks")],
 )
 def render_analytics(bk, loy_f, pay_f, ins_f, clr):
+    if not bk:
+        return html.Div("[ loading data... ]",
+                        style={"color":MUT,"fontFamily":MONO,"fontSize":"12px",
+                               "padding":"60px","textAlign":"center"})
     df_raw = safe_df(bk)
     df     = _apply_filters(df_raw, loy_f, pay_f, ins_f)
     fbadge = _filter_badge(df, df_raw)
@@ -567,6 +577,7 @@ def render_analytics(bk, loy_f, pay_f, ins_f, clr):
                                     name="revenue ₹", line=dict(color=C5,width=2),
                                     mode="lines+markers", marker=dict(size=4), yaxis="y2"))
         fig_d.update_layout(**CBASE, title="daily · bookings + revenue",
+                             xaxis=AXIS,
                              yaxis=dict(title="bookings",color=C1,showgrid=False),
                              yaxis2=dict(title="revenue ₹",overlaying="y",side="right",
                                          color=C5,showgrid=False),
@@ -586,7 +597,7 @@ def render_analytics(bk, loy_f, pay_f, ins_f, clr):
                              color_continuous_scale=[[0,CARD],[0.5,C6],[1,C4]])
         fig_sc.update_traces(textposition="top center",
                               textfont=dict(color=SUB,size=9,family=MONO))
-        fig_sc.update_layout(**CBASE, coloraxis_showscale=False, height=280)
+        fig_sc.update_layout(**CBASE, xaxis=AXIS, yaxis=AXIS, coloraxis_showscale=False, height=280)
     else:
         fig_sc = empty("model scatter"); fig_sc.update_layout(height=280)
 
@@ -603,6 +614,7 @@ def render_analytics(bk, loy_f, pay_f, ins_f, clr):
                                   orientation="h",marker_color=C4,opacity=0.8))
         fig_loc.update_layout(**CBASE, title="locations · pickup vs drop",
                                barmode="group",
+                               xaxis=AXIS,
                                yaxis={"categoryorder":"total ascending"}, height=280)
     else:
         fig_loc = empty("locations"); fig_loc.update_layout(height=280)
@@ -615,7 +627,7 @@ def render_analytics(bk, loy_f, pay_f, ins_f, clr):
                          title="revenue · loyalty_tier × payment_method",
                          barmode="stack",
                          color_discrete_sequence=[C1,C2,C3,C5,C4])
-        fig_lp.update_layout(**CBASE, height=270)
+        fig_lp.update_layout(**CBASE, xaxis=AXIS, yaxis=AXIS, height=270)
     else:
         fig_lp = empty("revenue by tier"); fig_lp.update_layout(height=270)
 
@@ -624,7 +636,7 @@ def render_analytics(bk, loy_f, pay_f, ins_f, clr):
         fig_pr = px.histogram(df, x="price_per_day", nbins=25,
                                title="price_per_day · distribution",
                                color_discrete_sequence=[C6])
-        fig_pr.update_layout(**CBASE, height=250)
+        fig_pr.update_layout(**CBASE, xaxis=AXIS, yaxis=AXIS, height=250)
     else:
         fig_pr = empty("price distribution"); fig_pr.update_layout(height=250)
 
@@ -658,6 +670,10 @@ def render_analytics(bk, loy_f, pay_f, ins_f, clr):
      Input("clear-filters",   "n_clicks")],
 )
 def render_observability(bk, loy_f, pay_f, ins_f, clr):
+    if not bk:
+        return html.Div("[ loading data... ]",
+                        style={"color":MUT,"fontFamily":MONO,"fontSize":"12px",
+                               "padding":"60px","textAlign":"center"})
     df_raw = safe_df(bk)
     df     = _apply_filters(df_raw, loy_f, pay_f, ins_f)
     fbadge = _filter_badge(df, df_raw)
@@ -694,6 +710,7 @@ def render_observability(bk, loy_f, pay_f, ins_f, clr):
                                                       line=dict(width=2,color=C3))))
         fig_vol.update_layout(**CBASE,
                                title=f"volume monitor · {len(anom)} anomaly detected",
+                               xaxis=AXIS, yaxis=AXIS,
                                legend=dict(orientation="h",y=1.12,x=0,font=dict(size=10)),
                                height=300)
     else:
@@ -718,6 +735,7 @@ def render_observability(bk, loy_f, pay_f, ins_f, clr):
         textposition="outside", textfont=dict(color=TX,size=9,family=MONO),
     ))
     fig_null.update_layout(**CBASE, title="null health · per column",
+                            xaxis=AXIS, yaxis=AXIS,
                             yaxis_range=[0,max(null_df2["pct"].max()*1.8,5)], height=250)
     fig_null.add_hline(y=5,line_dash="dot",line_color=C3,
                        annotation_text="5% threshold",
@@ -738,7 +756,7 @@ def render_observability(bk, loy_f, pay_f, ins_f, clr):
                           text="rate")
         fig_dup.update_traces(texttemplate="%{text:.1f}%",textposition="outside",
                                textfont=dict(color=TX,size=9))
-        fig_dup.update_layout(**CBASE, coloraxis_showscale=False, height=250)
+        fig_dup.update_layout(**CBASE, xaxis=AXIS, yaxis=AXIS, coloraxis_showscale=False, height=250)
     else:
         fig_dup = empty("duplicates"); fig_dup.update_layout(height=250)
 
@@ -754,7 +772,7 @@ def render_observability(bk, loy_f, pay_f, ins_f, clr):
                          title="freshness · records by month",
                          color="records",
                          color_continuous_scale=[[0,"#0a1520"],[1,C2]])
-        fig_fr.update_layout(**CBASE, coloraxis_showscale=False, height=240)
+        fig_fr.update_layout(**CBASE, xaxis=AXIS, yaxis=AXIS, coloraxis_showscale=False, height=240)
     else:
         fig_fr  = empty("freshness"); fig_fr.update_layout(height=240)
         latest  = "N/A"
@@ -808,6 +826,7 @@ def render_pipeline(sla):
     fig_dur.add_trace(go.Bar(x=sa["stage"],y=sa["max"],name="max",marker_color=C3,opacity=0.5))
     fig_dur.update_layout(**CBASE, title="stage duration · avg vs max (s)",
                           barmode="group",
+                          xaxis=AXIS, yaxis=AXIS,
                           legend=dict(orientation="h",y=1.12,x=0,font=dict(size=10)),
                           height=280)
 
@@ -818,7 +837,7 @@ def render_pipeline(sla):
                      color="status",
                      color_discrete_map={"SUCCESS":C2,"FAILED":C3,"SKIPPED":MUT},
                      hole=0.65)
-    fig_st.update_layout(**CBASE, height=280)
+    fig_st.update_layout(**CBASE, xaxis=AXIS, yaxis=AXIS, height=280)
 
     sr = (sla_df[sla_df["records_processed"]>0]
           .groupby("stage_name")["records_processed"].max().reset_index())
@@ -828,7 +847,7 @@ def render_pipeline(sla):
                       title="records processed · per stage",
                       color="records",
                       color_continuous_scale=[[0,"#0a1520"],[1,C2]])
-    fig_rec.update_layout(**CBASE, coloraxis_showscale=False, height=250)
+    fig_rec.update_layout(**CBASE, xaxis=AXIS, yaxis=AXIS, coloraxis_showscale=False, height=250)
 
     latest_run = sla_df["run_id"].iloc[0]
     ltd = sla_df[sla_df["run_id"]==latest_run].copy()
@@ -893,6 +912,10 @@ def render_pipeline(sla):
      Input("store-failed",      "data")],
 )
 def render_quality(val, exp, fail):
+    if not val:
+        return html.Div("[ loading data... ]",
+                        style={"color":MUT,"fontFamily":MONO,"fontSize":"12px",
+                               "padding":"60px","textAlign":"center"})
     val_df  = safe_df(val)
     exp_df  = safe_df(exp)
     fail_df = safe_df(fail)
@@ -916,7 +939,7 @@ def render_quality(val, exp, fail):
                         {"range":[70,90],"color":"#0d1a14"},
                         {"range":[90,100],"color":"#0a1e10"}]},
     ))
-    fig_gauge.update_layout(**CBASE, height=260)
+    fig_gauge.update_layout(**CBASE, xaxis=AXIS, yaxis=AXIS, height=260)
 
     if not exp_df.empty:
         es = exp_df.groupby("expectation_type")["success"].agg(
@@ -935,6 +958,7 @@ def render_quality(val, exp, fail):
                             title="validation rules · pass vs fail",
                             color_discrete_map={"passed":C2,"failed":C3})
         fig_rules.update_layout(**CBASE,
+                                 xaxis=AXIS,
                                  yaxis={"categoryorder":"total ascending"},
                                  height=300)
     else:
@@ -948,7 +972,7 @@ def render_quality(val, exp, fail):
                            annotation_text="target: 100%",
                            annotation_font=dict(color=C3,size=9))
         fig_hist.update_traces(line_width=2,marker_size=7)
-        fig_hist.update_layout(**CBASE, yaxis_range=[0,105], height=260)
+        fig_hist.update_layout(**CBASE, xaxis=AXIS, yaxis=AXIS, yaxis_range=[0,105], height=260)
     else:
         fig_hist = empty("quality history"); fig_hist.update_layout(height=260)
 
@@ -983,6 +1007,10 @@ def render_quality(val, exp, fail):
      Input("store-failed", "data")],
 )
 def render_debug(bk, fail):
+    if not bk:
+        return html.Div("[ loading data... ]",
+                        style={"color":MUT,"fontFamily":MONO,"fontSize":"12px",
+                               "padding":"60px","textAlign":"center"})
     df      = safe_df(bk)
     fail_df = safe_df(fail)
 

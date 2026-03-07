@@ -31,15 +31,17 @@ def get_monitoring_data():
             f"mysql+mysqlconnector://admin:admin@{host}:3306/booking",
             pool_pre_ping=True
         )
-        val_df  = pd.read_sql("SELECT * FROM validation_results ORDER BY created_at DESC", engine)
-        exp_df  = pd.read_sql("SELECT * FROM validation_expectation_details", engine)
-        fail_df = pd.read_sql("SELECT * FROM validation_failed_records LIMIT 500", engine)
-        sla_df  = pd.read_sql("SELECT * FROM pipeline_run_stats ORDER BY started_at DESC", engine)
+        val_df    = pd.read_sql("SELECT * FROM validation_results ORDER BY created_at DESC", engine)
+        exp_df    = pd.read_sql("SELECT * FROM validation_expectation_details", engine)
+        fail_df   = pd.read_sql("SELECT * FROM validation_failed_records LIMIT 500", engine)
+        sla_df    = pd.read_sql("SELECT * FROM pipeline_run_stats ORDER BY started_at DESC", engine)
+        alerts_df = pd.read_sql("SELECT * FROM pipeline_alerts ORDER BY created_at DESC LIMIT 50", engine)
+        schema_df = pd.read_sql("SELECT * FROM schema_registry_log ORDER BY registered_at DESC", engine)
         engine.dispose()
-        return val_df, exp_df, fail_df, sla_df
+        return val_df, exp_df, fail_df, sla_df, alerts_df, schema_df
     except Exception as e:
         print(f"[MYSQL ERROR] {e}")
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
 # ================================================================
 # THEME
@@ -217,6 +219,8 @@ app.layout = html.Div(
         dcc.Store(id="store-expectation", storage_type="memory"),
         dcc.Store(id="store-failed",      storage_type="memory"),
         dcc.Store(id="store-sla",         storage_type="memory"),
+        dcc.Store(id="store-alerts",      storage_type="memory"),
+        dcc.Store(id="store-schema",      storage_type="memory"),
         dcc.Store(id="active-tab",        storage_type="memory", data="tab-overview"),
 
         # ── Topbar ──────────────────────────────────────────
@@ -240,6 +244,7 @@ app.layout = html.Div(
                 ]),
             ]),
             html.Div(style={"display":"flex","alignItems":"center","gap":"16px"}, children=[
+                html.Span(id="alert-badge"),
                 html.Span(id="store-status", style={"color":SUB,"fontSize":"10px"}),
                 html.Span(id="last-updated", style={"color":MUT,"fontSize":"10px"}),
                 html.Button("↻ refresh", id="refresh-btn", n_clicks=0, style={
@@ -324,6 +329,8 @@ app.layout = html.Div(
      Output("store-expectation","data"),
      Output("store-failed",     "data"),
      Output("store-sla",        "data"),
+     Output("store-alerts",     "data"),
+     Output("store-schema",     "data"),
      Output("last-updated",     "children"),
      Output("store-status",     "children")],
     [Input("auto-refresh","n_intervals"),
@@ -333,26 +340,62 @@ app.layout = html.Div(
 def refresh_store(n, clicks):
     now = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
     try:
-        df                          = get_booking_data()
-        val_df, exp_df, fail_df, sla_df = get_monitoring_data()
+        df                                        = get_booking_data()
+        val_df, exp_df, fail_df, sla_df, alerts_df, schema_df = get_monitoring_data()
         status = (f"✦ {len(df):,} records  ·  "
                   f"{'✓ pg' if not df.empty else '✗ pg'}  "
                   f"{'✓ mysql' if not val_df.empty else '✗ mysql'}")
         return (
-            df.to_dict("records")       if not df.empty      else [],
-            val_df.to_dict("records")   if not val_df.empty  else [],
-            exp_df.to_dict("records")   if not exp_df.empty  else [],
-            fail_df.to_dict("records")  if not fail_df.empty else [],
-            sla_df.to_dict("records")   if not sla_df.empty  else [],
+            df.to_dict("records")         if not df.empty         else [],
+            val_df.to_dict("records")     if not val_df.empty     else [],
+            exp_df.to_dict("records")     if not exp_df.empty     else [],
+            fail_df.to_dict("records")    if not fail_df.empty    else [],
+            sla_df.to_dict("records")     if not sla_df.empty     else [],
+            alerts_df.to_dict("records")  if not alerts_df.empty  else [],
+            schema_df.to_dict("records")  if not schema_df.empty  else [],
             f"↻ {now}", status,
         )
     except Exception as e:
-        return [], [], [], [], [], f"↻ {now}", f"✗ {str(e)[:40]}"
+        return [], [], [], [], [], [], [], f"↻ {now}", f"✗ {str(e)[:40]}"
 
 
 # ================================================================
-# CB 2 — FILTER OPTIONS + SIDEBAR META: booking store se
+# CB 2a — ALERT BADGE: topbar mein active warnings dikhao
 # ================================================================
+@app.callback(
+    Output("alert-badge", "children"),
+    Input("store-alerts", "data"),
+)
+def update_alert_badge(alerts_data):
+    if not alerts_data:
+        return None
+    alerts_df = safe_df(alerts_data)
+    if alerts_df.empty or "alert_type" not in alerts_df.columns:
+        return None
+
+    failures = len(alerts_df[alerts_df["alert_type"] == "FAILURE"])
+    warnings = len(alerts_df[alerts_df["alert_type"] == "DQ_WARNING"])
+
+    if failures > 0:
+        return html.Span(
+            f"🚨 {failures} failure{'s' if failures>1 else ''}",
+            style={"backgroundColor":"rgba(255,71,87,0.15)",
+                   "color":C3,"border":f"1px solid {C3}",
+                   "borderRadius":"4px","padding":"3px 10px",
+                   "fontSize":"10px","fontFamily":MONO,"fontWeight":"700"},
+        )
+    elif warnings > 0:
+        return html.Span(
+            f"⚠️ {warnings} warning{'s' if warnings>1 else ''}",
+            style={"backgroundColor":"rgba(255,212,59,0.12)",
+                   "color":C5,"border":f"1px solid {C5}",
+                   "borderRadius":"4px","padding":"3px 10px",
+                   "fontSize":"10px","fontFamily":MONO,"fontWeight":"700"},
+        )
+    return pill("● all clear", C2)
+
+
+
 @app.callback(
     [Output("filter-loyalty",  "options"),
      Output("filter-payment",  "options"),
@@ -803,14 +846,19 @@ def render_observability(bk, loy_f, pay_f, ins_f, clr):
 
 
 # ================================================================
-# CB 7 — PIPELINE: only sla store
+# CB 7 — PIPELINE: sla + alerts + schema stores
 # ================================================================
 @app.callback(
     Output("content-pipeline","children"),
-    Input("store-sla","data"),
+    [Input("store-sla",    "data"),
+     Input("store-alerts", "data"),
+     Input("store-schema", "data")],
 )
-def render_pipeline(sla):
-    sla_df = safe_df(sla)
+def render_pipeline(sla, alerts, schema):
+    sla_df     = safe_df(sla)
+    alerts_df  = safe_df(alerts)
+    schema_df  = safe_df(schema)
+
     if sla_df.empty:
         return card([html.Div("[ no pipeline run data — run jenkins ]",
                               style={"color":MUT,"padding":"60px","textAlign":"center"})])
@@ -859,6 +907,71 @@ def render_pipeline(sla):
     cmap = {"stage_name":"stage","records_processed":"records",
             "duration_seconds":"duration(s)","status":"status","started_at":"started"}
 
+    # ── Alerts section ──────────────────────────────────────────
+    def _alert_row(row):
+        atype = str(row.get("alert_type",""))
+        color = C3 if atype=="FAILURE" else (C5 if atype=="DQ_WARNING" else C2)
+        icon  = "🚨" if atype=="FAILURE" else ("⚠️" if atype=="DQ_WARNING" else "✅")
+        return html.Div(style={
+            "display":"flex","gap":"12px","alignItems":"flex-start",
+            "padding":"10px 14px","borderBottom":f"1px solid {B}",
+            "backgroundColor":BG,
+        }, children=[
+            html.Span(icon, style={"fontSize":"14px","marginTop":"1px"}),
+            html.Div(style={"flex":"1"}, children=[
+                html.Div(style={"display":"flex","justifyContent":"space-between",
+                                "alignItems":"center","marginBottom":"3px"}, children=[
+                    html.Span(str(row.get("stage_name","")),
+                              style={"color":color,"fontSize":"10px",
+                                     "fontFamily":MONO,"fontWeight":"700"}),
+                    html.Span(str(row.get("created_at",""))[:19],
+                              style={"color":MUT,"fontSize":"9px","fontFamily":MONO}),
+                ]),
+                html.Div(str(row.get("error_message",""))[:120],
+                         style={"color":TX,"fontSize":"10px","fontFamily":MONO}),
+            ]),
+            pill(atype, color),
+        ])
+
+    alerts_rows = []
+    if not alerts_df.empty:
+        for _, row in alerts_df.head(10).iterrows():
+            alerts_rows.append(_alert_row(row))
+    else:
+        alerts_rows = [html.Div("[ no alerts — pipeline running clean ]",
+                                style={"color":MUT,"fontSize":"11px","fontFamily":MONO,
+                                       "padding":"20px","textAlign":"center"})]
+
+    # ── Schema Registry section ──────────────────────────────────
+    schema_rows = []
+    if not schema_df.empty:
+        for _, row in schema_df.iterrows():
+            compatible = row.get("is_compatible", True)
+            schema_rows.append(html.Div(style={
+                "display":"flex","justifyContent":"space-between","alignItems":"center",
+                "padding":"10px 14px","borderBottom":f"1px solid {B}","backgroundColor":BG,
+            }, children=[
+                html.Div(style={"display":"flex","gap":"12px","alignItems":"center"}, children=[
+                    html.Span("🔀", style={"fontSize":"14px"}),
+                    html.Div([
+                        html.Div(str(row.get("topic","")),
+                                 style={"color":C1,"fontSize":"10px","fontFamily":MONO,"fontWeight":"700"}),
+                        html.Div(str(row.get("schema_summary",""))[:80],
+                                 style={"color":SUB,"fontSize":"9px","fontFamily":MONO}),
+                    ]),
+                ]),
+                html.Div(style={"display":"flex","gap":"8px","alignItems":"center"}, children=[
+                    pill(f"v{row.get('schema_version','?')}", C4),
+                    pill("compatible ✓" if compatible else "⚠ breaking", C2 if compatible else C3),
+                    html.Span(str(row.get("registered_at",""))[:10],
+                              style={"color":MUT,"fontSize":"9px","fontFamily":MONO}),
+                ]),
+            ]))
+    else:
+        schema_rows = [html.Div("[ no schema registered — run schema registration stage ]",
+                                style={"color":MUT,"fontSize":"11px","fontFamily":MONO,
+                                       "padding":"20px","textAlign":"center"})]
+
     return loading(html.Div([
         section("pipeline health","jenkins · spark · stage metrics"),
         html.Div(style={"display":"flex","gap":"10px","marginBottom":"14px"}, children=[
@@ -899,6 +1012,36 @@ def render_pipeline(sla):
                     ],
                     page_size=10, sort_action="native",
                 ),
+            ]),
+        ]),
+
+        # ── Pipeline Alerts ─────────────────────────────────────
+        html.Div(style={"marginTop":"12px"}, children=[
+            card(accent=C3, mb="0", children=[
+                html.Div(style={"display":"flex","justifyContent":"space-between",
+                                "alignItems":"center","marginBottom":"14px"}, children=[
+                    html.Span("pipeline alerts · last 10",
+                              style={"color":C3,"fontFamily":MONO,"fontWeight":"700","fontSize":"11px"}),
+                    pill(f"{len(alerts_df)} total", C5) if not alerts_df.empty else None,
+                ]),
+                html.Div(style={"borderRadius":"6px","overflow":"hidden",
+                                "border":f"1px solid {B}"}, children=alerts_rows),
+            ]),
+        ]),
+
+        # ── Schema Registry ──────────────────────────────────────
+        html.Div(style={"marginTop":"12px"}, children=[
+            card(accent=C4, mb="0", children=[
+                html.Div(style={"display":"flex","justifyContent":"space-between",
+                                "alignItems":"center","marginBottom":"14px"}, children=[
+                    html.Span("schema registry · kafka topics",
+                              style={"color":C4,"fontFamily":MONO,"fontWeight":"700","fontSize":"11px"}),
+                    html.A("↗ localhost:8085", href="http://localhost:8085",
+                           target="_blank",
+                           style={"color":C6,"fontSize":"9px","fontFamily":MONO}),
+                ]),
+                html.Div(style={"borderRadius":"6px","overflow":"hidden",
+                                "border":f"1px solid {B}"}, children=schema_rows),
             ]),
         ]),
     ]))

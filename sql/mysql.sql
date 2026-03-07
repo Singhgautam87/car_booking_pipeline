@@ -93,3 +93,44 @@ CREATE TABLE IF NOT EXISTS pipeline_run_stats (
     INDEX idx_status    (status),
     INDEX idx_started   (started_at)
 );
+-- ── 5. PIPELINE ALERTS ───────────────────────────────────────────
+CREATE TABLE pipeline_alerts (
+    id                   INT AUTO_INCREMENT PRIMARY KEY,
+    pipeline_name        VARCHAR(100),          -- Jenkins pipeline name
+    stage_name           VARCHAR(100),          -- Jenkins stage name
+    execution_date       TIMESTAMP NULL,
+    error_message        TEXT,
+    alert_type           VARCHAR(50),           -- FAILURE / DQ_WARNING / SUCCESS / SCHEMA_ERROR
+    acknowledged         BOOLEAN DEFAULT FALSE,
+    created_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_pipeline (pipeline_name),
+    INDEX idx_alert_type (alert_type),
+    INDEX idx_created (created_at),
+    INDEX idx_acknowledged (acknowledged)
+);
+
+
+-- ── 6. SCHEMA REGISTRY LOG (NEW — Schema changes track) ──────────
+CREATE TABLE schema_registry_log (
+    id                   INT AUTO_INCREMENT PRIMARY KEY,
+    topic                VARCHAR(100),          -- Kafka topic name
+    schema_version       INT,                   -- Schema Registry version
+    schema_id            INT,                   -- Schema Registry ID
+    change_type          VARCHAR(50),           -- REGISTERED / UPDATED / DELETED
+    schema_summary       TEXT,                  -- Schema ka short description
+    is_compatible        BOOLEAN DEFAULT TRUE,  -- Backward compatible hai?
+    registered_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_topic (topic),
+    INDEX idx_version (schema_version)
+);
+
+-- ── SAMPLE DATA — Schema log mein initial entry ──────────────────
+INSERT INTO schema_registry_log
+    (topic, schema_version, schema_id, change_type, schema_summary, is_compatible)
+VALUES
+    ('car-bookings', 1, 1, 'REGISTERED',
+     'Initial schema: booking_id, customer_id, car_id, payment_amount, loyalty_tier',
+     TRUE);
+
+SELECT '✅ MySQL schema created successfully!' AS status;
+SELECT 'Tables: validation_results, validation_expectation_details, validation_failed_records, pipeline_run_stats, pipeline_alerts, schema_registry_log' AS tables_created;

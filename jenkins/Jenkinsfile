@@ -5,12 +5,11 @@ pipeline {
         COMPOSE_FILE    = "docker-compose.yml"
         COMPOSE_PROJECT = "car-booking-pipeline"
         SPARK_SUBMIT    = "docker exec spark-master /opt/spark/bin/spark-submit"
-        // ✅ Iceberg package (Delta replace)
         SPARK_PACKAGES  = "org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.2,org.postgresql:postgresql:42.5.0,mysql:mysql-connector-java:8.0.33,org.apache.hadoop:hadoop-aws:3.3.4,io.delta:delta-core_2.12:2.4.0"
-        
         DELTA_CONF      = "--conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog"
         S3_CONF         = "--conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 --conf spark.hadoop.fs.s3a.access.key=admin --conf spark.hadoop.fs.s3a.secret.key=admin123 --conf spark.hadoop.fs.s3a.path.style.access=true --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem"
         SPARK_MEMORY    = "--driver-memory 2g --executor-memory 2g --conf spark.driver.maxResultSize=1g"
+        ALERT_EMAIL     = "gautam901267@gmail.com"   
     }
 
     stages {
@@ -26,7 +25,8 @@ pipeline {
             steps {
                 sh '''
                     echo "=== Full Cleanup ==="
-                    docker rm -f postgres mysql kafka zookeeper minio kafka-ui spark-master great_expectations dashboard || true
+                    docker rm -f postgres mysql kafka zookeeper minio kafka-ui \
+                        spark-master great_expectations dashboard schema-registry || true
                     docker volume rm car-booking-pipeline_mysql_data || true
                     docker volume rm car-booking-pipeline_postgres_data || true
                     docker image prune -f || true
@@ -42,14 +42,10 @@ pipeline {
                     docker-compose -p ${COMPOSE_PROJECT} up -d \
                         postgres mysql kafka zookeeper minio kafka-ui spark great_expectations
 
-                    echo "Waiting for Kafka to initialize (60 seconds)..."
+                    echo "Waiting for Kafka (60s)..."
                     sleep 60
 
-                    echo "=== Kafka Logs ==="
-                    docker logs kafka --tail 30 || true
-
                     for i in 1 2 3 4 5; do
-                        echo "Kafka readiness check $i/5..."
                         if docker exec kafka kafka-broker-api-versions --bootstrap-server localhost:9092 2>/dev/null; then
                             echo "✅ Kafka ready!"
                             break
@@ -57,28 +53,33 @@ pipeline {
                         sleep 10
                     done
 
-                    docker-compose -p ${COMPOSE_PROJECT} ps
-
-                    # ✅ Spark files copy karo
+                    # ✅ Files copy karo
                     docker cp spark/. spark-master:/opt/spark-apps/
-                    echo "✅ Spark files copied to spark-master!"
-
-                    # ✅ Config copy karo spark + GE dono mein
                     docker exec -u root spark-master mkdir -p /opt/config
                     docker cp config/config.json spark-master:/opt/config/config.json
-                    echo "✅ Config copied to spark-master!"
-
                     docker exec -u root great_expectations mkdir -p /opt/config
                     docker cp config/config.json great_expectations:/opt/config/config.json
-                    echo "✅ Config copied to great_expectations!"
 
-                    # ✅ Verify
-                    echo "--- Config verify ---"
-                    docker exec spark-master cat /opt/config/config.json
+                    docker-compose -p ${COMPOSE_PROJECT} ps
+                    echo "✅ Containers ready!"
+                '''
+            }
+        }
 
-                    # ✅ Pipeline Run ID generate karo (SLA tracking)
-                    echo "PIPELINE_RUN_ID=$(date +%Y%m%d_%H%M%S)" >> /tmp/pipeline_env
-                    cat /tmp/pipeline_env
+        stage('Start Schema Registry') {
+            steps {
+                sh '''
+                    echo "=== Starting Schema Registry ==="
+                    docker-compose -p ${COMPOSE_PROJECT} up -d schema-registry
+
+                    for i in $(seq 1 12); do
+                        if curl -s http://localhost:8085/subjects >/dev/null 2>&1; then
+                            echo "✅ Schema Registry ready at http://localhost:8085"
+                            break
+                        fi
+                        echo "Waiting... $i/12"
+                        sleep 5
+                    done
                 '''
             }
         }
@@ -104,13 +105,46 @@ pipeline {
                         sleep 2
                     done
 
-                    echo "Running mysql.sql..."
                     docker exec -i mysql mysql -u admin -padmin booking < sql/mysql.sql
-
-                    echo "Running postgres.sql..."
                     docker exec -i postgres psql -U admin -d booking < sql/postgres.sql
 
                     echo "✅ All databases ready!"
+                '''
+            }
+        }
+
+        stage('Schema Registration') {
+            steps {
+                sh '''
+                    echo "=== Registering Kafka Schema ==="
+                    RUN_ID=$(date +%Y%m%d_%H%M%S)
+
+                    # ✅ Schema Registry mein car-bookings schema register karo
+                    RESPONSE=$(curl -s -o /tmp/schema_response.json -w "%{http_code}" \
+                        -X POST http://localhost:8085/subjects/car-bookings-value/versions \
+                        -H "Content-Type: application/vnd.schemaregistry.v1+json" \
+                        -d '{
+                            "schema": "{\"type\":\"record\",\"name\":\"CarBooking\",\"namespace\":\"com.carbooking\",\"fields\":[{\"name\":\"booking_id\",\"type\":\"string\"},{\"name\":\"customer_id\",\"type\":\"string\"},{\"name\":\"customer_name\",\"type\":\"string\"},{\"name\":\"car_id\",\"type\":\"string\"},{\"name\":\"model\",\"type\":\"string\"},{\"name\":\"category\",\"type\":\"string\"},{\"name\":\"pickup_location\",\"type\":\"string\"},{\"name\":\"drop_location\",\"type\":\"string\"},{\"name\":\"booking_date\",\"type\":\"string\"},{\"name\":\"return_date\",\"type\":\"string\"},{\"name\":\"price_per_day\",\"type\":\"double\"},{\"name\":\"rental_days\",\"type\":\"int\"},{\"name\":\"payment_amount\",\"type\":\"double\"},{\"name\":\"payment_method\",\"type\":\"string\"},{\"name\":\"payment_id\",\"type\":\"string\"},{\"name\":\"loyalty_tier\",\"type\":\"string\"},{\"name\":\"insurance_coverage\",\"type\":\"string\"},{\"name\":\"status\",\"type\":\"string\"},{\"name\":\"event_timestamp\",\"type\":\"string\"}]}"
+                        }')
+
+                    SCHEMA_ID=$(cat /tmp/schema_response.json | python3 -c \
+                        "import json,sys; d=json.load(sys.stdin); print(d.get('id','1'))" 2>/dev/null || echo "1")
+
+                    echo "Schema Response: $RESPONSE | Schema ID: $SCHEMA_ID"
+
+                    # ✅ MySQL mein schema log karo
+                    docker exec mysql mysql -u admin -padmin booking -e "
+                        INSERT INTO schema_registry_log
+                            (topic, schema_version, schema_id, change_type, schema_summary, is_compatible)
+                        VALUES
+                            ('car-bookings', 1, ${SCHEMA_ID}, 'REGISTERED',
+                             'booking_id, customer_id, car_id, payment_amount, loyalty_tier + 14 more fields',
+                             TRUE);
+                    "
+
+                    echo "=== Registered Subjects ==="
+                    curl -s http://localhost:8085/subjects
+                    echo "✅ Schema registered!"
                 '''
             }
         }
@@ -121,9 +155,7 @@ pipeline {
                     STAGE_START=$(date +%s)
                     RUN_ID=$(date +%Y%m%d_%H%M%S)
 
-                    sleep 5
                     for i in 1 2 3 4 5; do
-                        echo "Creating Kafka topic (attempt $i/5)..."
                         if docker exec kafka kafka-topics --create --if-not-exists \
                             --topic car-bookings \
                             --bootstrap-server localhost:9092 \
@@ -135,22 +167,22 @@ pipeline {
                         sleep 5
                     done
 
-                    docker exec great_expectations pip install kafka-python --quiet
+                    docker exec great_expectations pip install kafka-python requests --quiet
 
+                    docker cp kafka/producer_with_schema_registry.py great_expectations:/tmp/producer.py
                     docker cp kafka/data/car_booking.json great_expectations:/tmp/car_booking.json
-                    docker cp kafka/producer.py great_expectations:/tmp/producer.py
                     docker exec great_expectations python /tmp/producer.py
 
                     sleep 60
-                    docker exec kafka kafka-topics --describe --topic car-bookings --bootstrap-server localhost:9092
 
                     STAGE_END=$(date +%s)
                     DURATION=$((STAGE_END - STAGE_START))
                     docker exec mysql mysql -u admin -padmin booking -e "
-                        INSERT INTO pipeline_run_stats (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
-                        VALUES ('${RUN_ID}', 'kafka_producer', 0, ${DURATION}, 'SUCCESS', NOW());
+                        INSERT INTO pipeline_run_stats
+                            (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
+                        VALUES ('${RUN_ID}', 'kafka_producer', 1000, ${DURATION}, 'SUCCESS', NOW());
                     "
-                    echo "✅ SLA recorded: kafka_producer = ${DURATION}s"
+                    echo "✅ Producer complete | Duration: ${DURATION}s"
                 '''
             }
         }
@@ -181,15 +213,15 @@ pipeline {
 
                             $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
                                 /opt/spark-apps/jobs/ingest_stream.py
-                            echo "✅ Raw data Delta Lake mein!"
+                            echo "✅ Bronze layer ready!"
 
                             STAGE_END=$(date +%s)
                             DURATION=$((STAGE_END - STAGE_START))
                             docker exec mysql mysql -u admin -padmin booking -e "
-                                INSERT INTO pipeline_run_stats (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
+                                INSERT INTO pipeline_run_stats
+                                    (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
                                 VALUES ('${RUN_ID}', 'spark_ingest', 0, ${DURATION}, 'SUCCESS', NOW());
                             "
-                            echo "✅ SLA recorded: spark_ingest = ${DURATION}s"
                         '''
                     }
                 }
@@ -222,10 +254,11 @@ pipeline {
                         STAGE_END=$(date +%s)
                         DURATION=$((STAGE_END - STAGE_START))
                         docker exec mysql mysql -u admin -padmin booking -e "
-                            INSERT INTO pipeline_run_stats (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
+                            INSERT INTO pipeline_run_stats
+                                (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
                             VALUES ('${RUN_ID}', 'spark_transform', 0, ${DURATION}, 'SUCCESS', NOW());
                         "
-                        echo "✅ SLA recorded: spark_transform = ${DURATION}s"
+                        echo "✅ Silver layer ready!"
                     '''
                 }
             }
@@ -240,15 +273,15 @@ pipeline {
 
                         $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
                             /opt/spark-apps/jobs/merge.py
-                        echo "✅ Data merged!"
 
                         STAGE_END=$(date +%s)
                         DURATION=$((STAGE_END - STAGE_START))
                         docker exec mysql mysql -u admin -padmin booking -e "
-                            INSERT INTO pipeline_run_stats (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
+                            INSERT INTO pipeline_run_stats
+                                (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
                             VALUES ('${RUN_ID}', 'spark_merge', 0, ${DURATION}, 'SUCCESS', NOW());
                         "
-                        echo "✅ SLA recorded: spark_merge = ${DURATION}s"
+                        echo "✅ Curated layer ready!"
                     '''
                 }
             }
@@ -263,7 +296,6 @@ pipeline {
 
                         $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
                             /opt/spark-apps/jobs/write_to_postgres.py
-                        echo "✅ PostgreSQL staging ready!"
 
                         RECORD_COUNT=$(docker exec postgres psql -U admin -d booking -t -c \
                             "SELECT COUNT(*) FROM customer_booking_staging;" | tr -d ' ')
@@ -271,10 +303,11 @@ pipeline {
                         STAGE_END=$(date +%s)
                         DURATION=$((STAGE_END - STAGE_START))
                         docker exec mysql mysql -u admin -padmin booking -e "
-                            INSERT INTO pipeline_run_stats (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
+                            INSERT INTO pipeline_run_stats
+                                (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
                             VALUES ('${RUN_ID}', 'write_postgres', ${RECORD_COUNT}, ${DURATION}, 'SUCCESS', NOW());
                         "
-                        echo "✅ SLA recorded: write_postgres = ${DURATION}s | records = ${RECORD_COUNT}"
+                        echo "✅ PostgreSQL ready | Records: ${RECORD_COUNT}"
                     '''
                 }
             }
@@ -285,8 +318,6 @@ pipeline {
                 sh '''
                     STAGE_START=$(date +%s)
                     RUN_ID=$(date +%Y%m%d_%H%M%S)
-
-                    echo "=== Data Validation Setup ==="
 
                     docker exec great_expectations mkdir -p /ge/jobs
                     docker exec great_expectations mkdir -p /ge/great_expectations/expectations
@@ -304,66 +335,60 @@ pipeline {
                         DELETE FROM validation_failed_records;
                     "
 
-                    echo "Running validation..."
                     docker exec great_expectations python /ge/jobs/run_ge.py
 
-                    echo "=== Validation Results ==="
-                    docker exec mysql mysql -u admin -padmin booking -e "
-                        SELECT run_identifier, total_expectations,
-                               passed_expectations, failed_expectations, success_rate
-                        FROM validation_results;
-                    "
-                    docker exec mysql mysql -u admin -padmin booking -e "
-                        SELECT COUNT(*) as failed_records FROM validation_failed_records;
-                    "
+                    # ✅ DQ Score check karo
+                    DQ_SCORE=$(docker exec mysql mysql -u admin -padmin booking -sN -e \
+                        "SELECT COALESCE(success_rate, 0) FROM validation_results ORDER BY created_at DESC LIMIT 1;" \
+                        | tr -d ' ')
+
+                    echo "📊 Data Quality Score: ${DQ_SCORE}%"
 
                     FAILED_COUNT=$(docker exec mysql mysql -u admin -padmin booking -sN -e \
                         "SELECT COUNT(*) FROM validation_failed_records;" | tr -d ' ')
+
                     STAGE_END=$(date +%s)
                     DURATION=$((STAGE_END - STAGE_START))
+
                     docker exec mysql mysql -u admin -padmin booking -e "
-                        INSERT INTO pipeline_run_stats (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
+                        INSERT INTO pipeline_run_stats
+                            (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
                         VALUES ('${RUN_ID}', 'data_validation', ${FAILED_COUNT}, ${DURATION}, 'SUCCESS', NOW());
                     "
-                    echo "✅ SLA recorded: data_validation = ${DURATION}s | failed_records = ${FAILED_COUNT}"
+
+                    # ✅ DQ Warning — 80% se kam hone par alert log karo
+                    if [ ! -z "$DQ_SCORE" ]; then
+                        docker exec mysql mysql -u admin -padmin booking -e "
+                            INSERT INTO pipeline_alerts
+                                (pipeline_name, stage_name, execution_date, error_message, alert_type)
+                            SELECT 'car_booking_pipeline', 'data_validation', NOW(),
+                                   CONCAT('DQ Score: ${DQ_SCORE}% — below 80% threshold'), 'DQ_WARNING'
+                            WHERE ${DQ_SCORE} < 80;
+                        "
+                    fi
+
                     echo "✅ Validation complete!"
                 '''
             }
         }
 
-        // ✅ PERMANENT FIX:
-        // - Dockerfile mein sab packages pre-installed
-        // - dashboard.py Dockerfile COPY se bake hoti hai
-        // - --no-cache se latest dashboard.py hamesha use hoti hai
-        // - No runtime pip install, no docker cp
         stage('Start Dashboard') {
             steps {
                 sh '''
                     docker rm -f dashboard || true
-
-                    # ✅ Fresh build — latest dashboard.py hamesha bake hogi
                     docker-compose -p ${COMPOSE_PROJECT} build --no-cache dashboard
-
-                    # ✅ Start karo
                     docker-compose -p ${COMPOSE_PROJECT} up -d dashboard
 
-                    echo "Waiting for dashboard to start..."
                     sleep 15
 
-                    echo "=== Dashboard Logs ==="
-                    docker logs dashboard --tail 30 || true
-
-                    # ✅ Health check
                     for i in 1 2 3 4 5; do
                         if docker exec dashboard curl -s http://localhost:8050 >/dev/null 2>&1; then
-                            echo "✅ Dashboard is up at http://localhost:8050"
+                            echo "✅ Dashboard ready at http://localhost:8050"
                             break
                         fi
                         echo "Waiting... $i/5"
                         sleep 10
                     done
-
-                    echo "✅ Dashboard ready: http://localhost:8050"
                 '''
             }
         }
@@ -371,30 +396,81 @@ pipeline {
 
     post {
         success {
+            sh '''
+                docker exec mysql mysql -u admin -padmin booking -e "
+                    INSERT INTO pipeline_alerts
+                        (pipeline_name, stage_name, execution_date, error_message, alert_type)
+                    VALUES
+                        ('car_booking_pipeline', 'all_stages', NOW(),
+                         'Pipeline completed successfully', 'SUCCESS');
+                " || true
+            '''
             echo "✅ Pipeline complete!"
-            echo "📊 Dashboard:  http://localhost:8050"
-            echo "📋 Kafka UI:   http://localhost:8081"
-            echo "🗄️  MinIO:      http://localhost:9001"
-            echo "⚡ Spark UI:   http://localhost:8082"
+            echo "📊 Dashboard:       http://localhost:8050"
+            echo "📋 Kafka UI:        http://localhost:8081"
+            echo "🗄️  MinIO:           http://localhost:9001"
+            echo "⚡ Spark UI:        http://localhost:8082"
+            echo "🔀 Schema Registry: http://localhost:8085"
+
+            // ✅ Success email
+            mail(
+                to:      "${ALERT_EMAIL}",
+                subject: "✅ Car Booking Pipeline — SUCCESS #${BUILD_NUMBER}",
+                body:    """
+Pipeline completed successfully!
+
+Build     : #${BUILD_NUMBER}
+Duration  : ${currentBuild.durationString}
+Branch    : ${GIT_BRANCH}
+
+Links:
+  Dashboard      : http://localhost:8050
+  Kafka UI       : http://localhost:8081
+  Schema Registry: http://localhost:8085
+  Jenkins Build  : ${BUILD_URL}
+                """.stripIndent()
+            )
         }
         failure {
             sh '''
+                docker exec mysql mysql -u admin -padmin booking -e "
+                    INSERT INTO pipeline_alerts
+                        (pipeline_name, stage_name, execution_date, error_message, alert_type)
+                    VALUES
+                        ('car_booking_pipeline', 'unknown', NOW(),
+                         'Jenkins pipeline failed', 'FAILURE');
+                " || true
+
                 echo "=== Container Status ==="
                 docker-compose -p ${COMPOSE_PROJECT} ps || true
                 echo "=== Kafka Logs ==="
-                docker logs kafka --tail 50 || true
+                docker logs kafka --tail 30 || true
                 echo "=== Spark Logs ==="
                 docker logs spark-master --tail 50 || true
-                echo "=== Validation Logs ==="
-                docker logs great_expectations --tail 50 || true
-                echo "=== MySQL Logs ==="
-                docker logs mysql --tail 30 || true
-                echo "=== PostgreSQL Logs ==="
-                docker logs postgres --tail 30 || true
+                echo "=== Schema Registry Logs ==="
+                docker logs schema-registry --tail 20 || true
                 echo "=== Dashboard Logs ==="
-                docker logs dashboard --tail 50 || true
+                docker logs dashboard --tail 30 || true
             '''
             echo "❌ Pipeline failed!"
+
+            // ✅ Failure email
+            mail(
+                to:      "${ALERT_EMAIL}",
+                subject: "❌ Car Booking Pipeline — FAILED #${BUILD_NUMBER}",
+                body:    """
+Pipeline FAILED!
+
+Build     : #${BUILD_NUMBER}
+Stage     : ${STAGE_NAME}
+Branch    : ${GIT_BRANCH}
+
+Check Jenkins logs:
+  ${BUILD_URL}console
+
+Fix karo aur dobara push karo.
+                """.stripIndent()
+            )
         }
     }
 }

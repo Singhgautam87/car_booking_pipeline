@@ -9,7 +9,7 @@ pipeline {
         DELTA_CONF      = "--conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog"
         S3_CONF         = "--conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 --conf spark.hadoop.fs.s3a.access.key=admin --conf spark.hadoop.fs.s3a.secret.key=admin123 --conf spark.hadoop.fs.s3a.path.style.access=true --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem"
         SPARK_MEMORY    = "--driver-memory 2g --executor-memory 2g --conf spark.driver.maxResultSize=1g"
-        ALERT_EMAIL     = "gautam901267@gmail.com"   
+        ALERT_EMAIL     = "your-email@gmail.com"   // ← apna Gmail yahan likhna
     }
 
     stages {
@@ -73,7 +73,7 @@ pipeline {
                     docker-compose -p ${COMPOSE_PROJECT} up -d schema-registry
 
                     for i in $(seq 1 12); do
-                        if curl -s http://localhost:8085/subjects >/dev/null 2>&1; then
+                        if docker exec schema-registry curl -s http://localhost:8081/subjects >/dev/null 2>&1; then
                             echo "✅ Schema Registry ready at http://localhost:8085"
                             break
                         fi
@@ -121,7 +121,7 @@ pipeline {
 
                     # ✅ Schema Registry mein car-bookings schema register karo
                     RESPONSE=$(curl -s -o /tmp/schema_response.json -w "%{http_code}" \
-                        -X POST http://localhost:8085/subjects/car-bookings-value/versions \
+                        -X POST http://schema-registry:8081/subjects/car-bookings-value/versions \
                         -H "Content-Type: application/vnd.schemaregistry.v1+json" \
                         -d '{
                             "schema": "{\"type\":\"record\",\"name\":\"CarBooking\",\"namespace\":\"com.carbooking\",\"fields\":[{\"name\":\"booking_id\",\"type\":\"string\"},{\"name\":\"customer_id\",\"type\":\"string\"},{\"name\":\"customer_name\",\"type\":\"string\"},{\"name\":\"car_id\",\"type\":\"string\"},{\"name\":\"model\",\"type\":\"string\"},{\"name\":\"category\",\"type\":\"string\"},{\"name\":\"pickup_location\",\"type\":\"string\"},{\"name\":\"drop_location\",\"type\":\"string\"},{\"name\":\"booking_date\",\"type\":\"string\"},{\"name\":\"return_date\",\"type\":\"string\"},{\"name\":\"price_per_day\",\"type\":\"double\"},{\"name\":\"rental_days\",\"type\":\"int\"},{\"name\":\"payment_amount\",\"type\":\"double\"},{\"name\":\"payment_method\",\"type\":\"string\"},{\"name\":\"payment_id\",\"type\":\"string\"},{\"name\":\"loyalty_tier\",\"type\":\"string\"},{\"name\":\"insurance_coverage\",\"type\":\"string\"},{\"name\":\"status\",\"type\":\"string\"},{\"name\":\"event_timestamp\",\"type\":\"string\"}]}"
@@ -143,7 +143,7 @@ pipeline {
                     "
 
                     echo "=== Registered Subjects ==="
-                    curl -s http://localhost:8085/subjects
+                    docker exec schema-registry curl -s http://localhost:8081/subjects
                     echo "✅ Schema registered!"
                 '''
             }

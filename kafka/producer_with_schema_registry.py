@@ -155,41 +155,51 @@ def run_producer(total_messages: int = 1000):
     # Step 1: Schema register karo
     schema_ok = register_schema()
 
-    # Step 2: Kafka Producer initialize
+    # Step 2: car_booking.json se data load karo
+    json_path = "/tmp/car_booking.json"
+    bookings = []
+    try:
+        with open(json_path, "r") as f:
+            raw = json.load(f)
+            bookings = raw if isinstance(raw, list) else [raw]
+        print(f"✅ Loaded {len(bookings)} records from {json_path}")
+    except Exception as e:
+        print(f"⚠️  Could not load {json_path}: {e} — using generated data")
+        bookings = [generate_booking(i) for i in range(1, total_messages + 1)]
+
+    # Step 3: Kafka Producer initialize
     producer = KafkaProducer(
         bootstrap_servers=[KAFKA_BOOTSTRAP],
         value_serializer=lambda v: json.dumps(v).encode("utf-8"),
         key_serializer=lambda k: k.encode("utf-8"),
-        acks="all",                   # Strong delivery guarantee
+        acks="all",
         retries=3,
         max_block_ms=30000,
     )
 
-    sent = 0
+    sent   = 0
     failed = 0
+    total  = len(bookings)
 
-    print(f"\n📤 Sending {total_messages} messages to topic: {TOPIC}")
+    print(f"\n📤 Sending {total} messages to topic: {TOPIC}")
     print("-" * 50)
 
-    for i in range(1, total_messages + 1):
+    for i, message in enumerate(bookings, 1):
         try:
-            message = generate_booking(i)
+            if "event_timestamp" not in message:
+                message["event_timestamp"] = datetime.now().isoformat()
 
-            # Schema validate karo before sending
             if schema_ok and not validate_message(message):
                 failed += 1
                 continue
 
-            future = producer.send(
-                TOPIC,
-                key=message["booking_id"],
-                value=message
-            )
+            booking_id = str(message.get("booking_id", f"BK{i:05d}"))
+            future = producer.send(TOPIC, key=booking_id, value=message)
             future.get(timeout=10)
             sent += 1
 
             if i % 100 == 0:
-                print(f"  ✅ Sent {sent}/{total_messages} messages...")
+                print(f"  ✅ Sent {sent}/{total} messages...")
 
         except Exception as e:
             print(f"  ❌ Error sending message {i}: {e}")
@@ -207,4 +217,4 @@ def run_producer(total_messages: int = 1000):
 
 
 if __name__ == "__main__":
-    run_producer(total_messages=1000)
+    run_producer()

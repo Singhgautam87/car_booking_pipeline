@@ -1,3 +1,8 @@
+"""
+Car Booking Pipeline Dashboard
+Architecture: dcc.Store → tab-specific callbacks → no unnecessary re-renders
+Stack: Kafka → Spark → Delta Lake → PostgreSQL → Dash
+"""
 import os
 import dash
 from dash import dcc, html, Input, Output, State, dash_table, ctx
@@ -461,21 +466,23 @@ def switch_tab(ov,an,ml,pi,qu,de, current):
     [Input("store-booking",   "data"),
      Input("store-sla",       "data"),
      Input("store-validation","data"),
+     Input("store-alerts",    "data"),
      Input("filter-loyalty",  "value"),
      Input("filter-payment",  "value"),
      Input("filter-insurance","value"),
      Input("clear-filters",   "n_clicks")],
 )
-def render_overview(bk, sla, val, loy_f, pay_f, ins_f, clr):
+def render_overview(bk, sla, val, alerts, loy_f, pay_f, ins_f, clr):
     if not bk:
         return html.Div("[ loading data... ]",
                         style={"color":MUT,"fontFamily":MONO,"fontSize":"12px",
                                "padding":"60px","textAlign":"center"})
-    df_raw  = safe_df(bk)
-    sla_df  = safe_df(sla)
-    val_df  = safe_df(val)
-    df      = _apply_filters(df_raw, loy_f, pay_f, ins_f)
-    fbadge  = _filter_badge(df, df_raw)
+    df_raw     = safe_df(bk)
+    sla_df     = safe_df(sla)
+    val_df     = safe_df(val)
+    alerts_df  = safe_df(alerts)
+    df         = _apply_filters(df_raw, loy_f, pay_f, ins_f)
+    fbadge     = _filter_badge(df, df_raw)
 
     total_b   = df["booking_id"].nunique()   if not df.empty and "booking_id"      in df.columns else 0
     total_c   = df["customer_id"].nunique()  if not df.empty and "customer_id"     in df.columns else 0
@@ -484,6 +491,8 @@ def render_overview(bk, sla, val, loy_f, pay_f, ins_f, clr):
     avg_rev   = df["payment_amount"].mean()  if not df.empty and "payment_amount"  in df.columns else 0
     dq_score  = val_df["success_rate"].mean()if not val_df.empty and "success_rate" in val_df.columns else 0
     p_ok      = not sla_df.empty and len(sla_df[sla_df["status"]=="FAILED"])==0 if not sla_df.empty else False
+    failures  = len(alerts_df[alerts_df["alert_type"]=="FAILURE"]) if not alerts_df.empty and "alert_type" in alerts_df.columns else 0
+    warnings  = len(alerts_df[alerts_df["alert_type"]=="DQ_WARNING"]) if not alerts_df.empty and "alert_type" in alerts_df.columns else 0
 
     # Revenue sparkline
     if not df.empty and "booking_date" in df.columns:
@@ -555,6 +564,8 @@ def render_overview(bk, sla, val, loy_f, pay_f, ins_f, clr):
                 pill("● healthy" if p_ok else "● issues", C2 if p_ok else C3),
                 pill(f"dq: {dq_score:.1f}%",
                      C2 if dq_score>=90 else (C5 if dq_score>=70 else C3)),
+                pill(f"🚨 {failures} failure{'s' if failures!=1 else ''}", C3) if failures > 0 else None,
+                pill(f"⚠️ {warnings} warning{'s' if warnings!=1 else ''}", C5) if warnings > 0 and failures == 0 else None,
             ]),
         ]),
         html.Div(style={"display":"flex","gap":"10px","marginBottom":"14px","flexWrap":"wrap"},
@@ -565,6 +576,7 @@ def render_overview(bk, sla, val, loy_f, pay_f, ins_f, clr):
             kpi("unique cars",     f"{total_car:,}",      C5, "🚘"),
             kpi("avg booking",     f"₹{avg_rev:,.0f}",    C6, "📊"),
             kpi("data quality",    f"{dq_score:.1f}%",    C4, "🛡️"),
+            kpi("active alerts",   str(failures+warnings), C3 if failures>0 else (C5 if warnings>0 else C2), "🔔"),
         ]),
         card([dcc.Graph(figure=fig_spark, config={"displayModeBar":False})], accent=C2),
         html.Div(style={"display":"grid","gridTemplateColumns":"1fr 1.5fr","gap":"12px","marginBottom":"12px"},

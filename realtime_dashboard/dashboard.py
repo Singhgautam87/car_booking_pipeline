@@ -921,7 +921,10 @@ def render_pipeline(sla, alerts, schema):
 
     # ── Alerts section ──────────────────────────────────────────
     def _alert_row(row):
-        atype = str(row.get("alert_type",""))
+        atype   = str(row["alert_type"])    if "alert_type"    in row.index else ""
+        stage   = str(row["stage_name"])    if "stage_name"    in row.index else ""
+        created = str(row["created_at"])    if "created_at"    in row.index else ""
+        errmsg  = str(row["error_message"]) if "error_message" in row.index else ""
         color = C3 if atype=="FAILURE" else (C5 if atype=="DQ_WARNING" else C2)
         icon  = "🚨" if atype=="FAILURE" else ("⚠️" if atype=="DQ_WARNING" else "✅")
         return html.Div(style={
@@ -933,13 +936,13 @@ def render_pipeline(sla, alerts, schema):
             html.Div(style={"flex":"1"}, children=[
                 html.Div(style={"display":"flex","justifyContent":"space-between",
                                 "alignItems":"center","marginBottom":"3px"}, children=[
-                    html.Span(str(row.get("stage_name","")),
+                    html.Span(stage,
                               style={"color":color,"fontSize":"10px",
                                      "fontFamily":MONO,"fontWeight":"700"}),
-                    html.Span(str(row.get("created_at",""))[:19],
+                    html.Span(created[:19],
                               style={"color":MUT,"fontSize":"9px","fontFamily":MONO}),
                 ]),
-                html.Div(str(row.get("error_message",""))[:120],
+                html.Div(errmsg[:120],
                          style={"color":TX,"fontSize":"10px","fontFamily":MONO}),
             ]),
             pill(atype, color),
@@ -958,7 +961,11 @@ def render_pipeline(sla, alerts, schema):
     schema_rows = []
     if not schema_df.empty:
         for _, row in schema_df.iterrows():
-            compatible = row.get("is_compatible", True)
+            compatible  = bool(row["is_compatible"]) if "is_compatible" in row.index else True
+            topic       = str(row["topic"])          if "topic"          in row.index else ""
+            summary     = str(row["schema_summary"]) if "schema_summary" in row.index else ""
+            version     = row["schema_version"]      if "schema_version" in row.index else "?"
+            reg_at      = str(row["registered_at"])  if "registered_at"  in row.index else ""
             schema_rows.append(html.Div(style={
                 "display":"flex","justifyContent":"space-between","alignItems":"center",
                 "padding":"10px 14px","borderBottom":f"1px solid {B}","backgroundColor":BG,
@@ -966,16 +973,16 @@ def render_pipeline(sla, alerts, schema):
                 html.Div(style={"display":"flex","gap":"12px","alignItems":"center"}, children=[
                     html.Span("🔀", style={"fontSize":"14px"}),
                     html.Div([
-                        html.Div(str(row.get("topic","")),
+                        html.Div(topic,
                                  style={"color":C1,"fontSize":"10px","fontFamily":MONO,"fontWeight":"700"}),
-                        html.Div(str(row.get("schema_summary",""))[:80],
+                        html.Div(summary[:80],
                                  style={"color":SUB,"fontSize":"9px","fontFamily":MONO}),
                     ]),
                 ]),
                 html.Div(style={"display":"flex","gap":"8px","alignItems":"center"}, children=[
-                    pill(f"v{row.get('schema_version','?')}", C4),
+                    pill(f"v{version}", C4),
                     pill("compatible ✓" if compatible else "⚠ breaking", C2 if compatible else C3),
-                    html.Span(str(row.get("registered_at",""))[:10],
+                    html.Span(reg_at[:10],
                               style={"color":MUT,"fontSize":"9px","fontFamily":MONO}),
                 ]),
             ]))

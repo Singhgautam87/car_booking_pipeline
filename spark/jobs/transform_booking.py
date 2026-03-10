@@ -1,7 +1,7 @@
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
     col, to_date, trim, year, month, current_timestamp,
-    when, lit, to_timestamp, hour, regexp_extract
+    when, lit, to_timestamp, hour, regexp_extract, concat
 )
 from delta.tables import DeltaTable
 import sys, os
@@ -21,7 +21,6 @@ spark = SparkSession.builder \
     .getOrCreate()
 
 
-import sys
 import logging
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -43,7 +42,6 @@ try:
     )
 
     # ✅ Pickup hour extract — "3:00 AM" → 3
-    # Business insight: Peak hours kaun se hain?
     booking_clean = booking_clean.withColumn(
         "pickup_hour",
         regexp_extract(col("pickup_time"), r"(\d+):", 1).cast("integer")
@@ -56,7 +54,7 @@ try:
         .otherwise(col("pickup_hour"))
     )
 
-    # ✅ Time slot classify — data mein 3:00 AM, 9:00 PM type times hain
+    # ✅ Time slot classify
     booking_clean = booking_clean.withColumn(
         "pickup_slot",
         when((col("pickup_hour") >= 0)  & (col("pickup_hour") < 6),  lit("late_night"))
@@ -66,20 +64,16 @@ try:
     )
 
     # ✅ Trip type — same city vs different city
-    # Delhi Airport → Noida = intercity
-    # Delhi Airport → Delhi Airport = local
     booking_clean = booking_clean.withColumn(
         "trip_type",
         when(col("pickup_location") == col("drop_location"), lit("local"))
         .otherwise(lit("intercity"))
     )
 
-    # ✅ Route — "Delhi Airport → Noida" — analytics ke liye
+    # ✅ Route — FIXED: using concat() function instead of .concat() method
     booking_clean = booking_clean.withColumn(
         "route",
-        col("pickup_location").cast("string")
-        .concat(lit(" → "))
-        .concat(col("drop_location").cast("string"))
+        concat(col("pickup_location"), lit(" → "), col("drop_location"))
     )
 
     # ✅ Partition columns

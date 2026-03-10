@@ -18,18 +18,27 @@ spark = SparkSession.builder \
     .config("spark.jars", "/opt/spark/jars/postgresql-42.6.0.jar") \
     .getOrCreate()
 
+spark.sparkContext.setLogLevel("WARN")
+
 merged_df = spark.read.format("delta").load(delta_paths['merged'])
-total = merged_df.count()
+
+# ✅ Drop audit columns before writing to PostgreSQL
+final_df = merged_df.drop("merged_at")
+
+total = final_df.count()
 print(f"📦 Delta Lake se {total:,} records read kiye")
 
-merged_df.write \
+# ✅ IDEMPOTENCY — overwrite staging table (truncate + insert)
+# Staging table = always fresh data from Delta Lake
+final_df.write \
     .format("jdbc") \
-    .option("url",      config.get_postgres_jdbc_url()) \
-    .option("dbtable",  tables['staging']) \
-    .option("user",     postgres_cfg['user']) \
-    .option("password", postgres_cfg['password']) \
-    .option("driver",   postgres_cfg['driver']) \
+    .option("url",                  config.get_postgres_jdbc_url()) \
+    .option("dbtable",              tables['staging']) \
+    .option("user",                 postgres_cfg['user']) \
+    .option("password",             postgres_cfg['password']) \
+    .option("driver",               postgres_cfg['driver']) \
+    .option("truncate",             "true") \
     .mode("overwrite") \
     .save()
 
-print(f"✅ Data written to PostgreSQL: {tables['staging']} | records: {total:,}")
+print(f"✅ PostgreSQL staging refreshed | table: {tables['staging']} | records: {total:,}")

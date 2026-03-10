@@ -1,5 +1,5 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import from_json, col, explode
+from pyspark.sql.functions import from_json, col, explode, year, month, dayofmonth, current_timestamp
 from pyspark.sql.types import *
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'lib'))
@@ -17,6 +17,8 @@ spark = SparkSession.builder \
     .config("spark.hadoop.fs.s3a.secret.key",        minio_cfg['secret_key']) \
     .config("spark.hadoop.fs.s3a.path.style.access", str(minio_cfg['path_style']).lower()) \
     .getOrCreate()
+
+spark.sparkContext.setLogLevel("WARN")
 
 schema = StructType([
     StructField("booking_id",   StringType()),
@@ -71,9 +73,17 @@ parsed_df = df.select(
     from_json(col("value").cast("string"), schema).alias("data")
 ).select("data.*")
 
+# ── Bronze Layer — Raw data with partitioning ──────────────────
 raw_df = parsed_df.select(
-    col("booking_id"), col("booking_date"),
-    col("customer"), col("booking_details")
+    col("booking_id"),
+    col("booking_date"),
+    col("customer"),
+    col("booking_details"),
+    current_timestamp().alias("ingested_at"),
+    # ✅ Partition columns
+    year(col("booking_date").cast("date")).alias("year"),
+    month(col("booking_date").cast("date")).alias("month"),
+    dayofmonth(col("booking_date").cast("date")).alias("day"),
 )
 
 raw_cars_df = parsed_df.select(
@@ -84,7 +94,8 @@ raw_cars_df = parsed_df.select(
     col("car.model").alias("model"),
     col("car.price_per_day").alias("price_per_day"),
     col("car.insurance.provider").alias("insurance_provider"),
-    col("car.insurance.coverage_type").alias("insurance_coverage")
+    col("car.insurance.coverage_type").alias("insurance_coverage"),
+    current_timestamp().alias("ingested_at"),
 )
 
 raw_payments_df = parsed_df.select(
@@ -93,13 +104,16 @@ raw_payments_df = parsed_df.select(
     col("booking_id"),
     col("payment.payment_id").alias("payment_id"),
     col("payment.method").alias("payment_method"),
-    col("payment.amount").alias("payment_amount")
+    col("payment.amount").alias("payment_amount"),
+    current_timestamp().alias("ingested_at"),
 )
 
+# ✅ Partitioned write — Bronze layer
 raw_query = raw_df.writeStream \
     .format("delta") \
     .option("path",               delta_paths['raw']) \
     .option("checkpointLocation", "/tmp/checkpoint_raw") \
+    .partitionBy("year", "month", "day") \
     .outputMode("append").start()
 
 cars_query = raw_cars_df.writeStream \
@@ -118,4 +132,4 @@ raw_query.awaitTermination(timeout=120)
 cars_query.awaitTermination(timeout=120)
 payments_query.awaitTermination(timeout=120)
 
-print("✅ All streams written to Delta Lake!")
+print("✅ Bronze layer written with partitioning: year/month/day")

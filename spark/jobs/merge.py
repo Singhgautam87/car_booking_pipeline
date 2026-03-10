@@ -17,40 +17,53 @@ spark = SparkSession.builder \
     .config("spark.hadoop.fs.s3a.path.style.access", str(minio_cfg['path_style']).lower()) \
     .getOrCreate()
 
-spark.sparkContext.setLogLevel("WARN")
 
-customer_df = spark.read.format("delta").load(delta_paths['customer_transformed'])
-booking_df  = spark.read.format("delta").load(delta_paths['booking_transformed'])
-cars_df     = spark.read.format("delta").load(delta_paths['cars_transformed'])
-payments_df = spark.read.format("delta").load(delta_paths['payments_transformed'])
+import sys
+import logging
 
-# ✅ Drop partition/audit columns before merge to avoid duplicates
-booking_df  = booking_df.drop("year", "month", "transformed_at")
-customer_df = customer_df.drop("transformed_at")
-cars_df     = cars_df.drop("transformed_at")
-payments_df = payments_df.drop("transformed_at")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger(__name__)
 
-merged_df = booking_df \
-    .join(customer_df, on="customer_id", how="left") \
-    .join(cars_df,     on="booking_id",  how="left") \
-    .join(payments_df, on="booking_id",  how="left") \
-    .withColumn("merged_at", current_timestamp())
+try:
+    spark.sparkContext.setLogLevel("WARN")
 
-output_path = delta_paths['merged']
+    customer_df = spark.read.format("delta").load(delta_paths['customer_transformed'])
+    booking_df  = spark.read.format("delta").load(delta_paths['booking_transformed'])
+    cars_df     = spark.read.format("delta").load(delta_paths['cars_transformed'])
+    payments_df = spark.read.format("delta").load(delta_paths['payments_transformed'])
 
-# ✅ IDEMPOTENCY — MERGE on booking_id
-if DeltaTable.isDeltaTable(spark, output_path):
-    delta_table = DeltaTable.forPath(spark, output_path)
-    delta_table.alias("target").merge(
-        merged_df.alias("source"),
-        "target.booking_id = source.booking_id"
-    ).whenMatchedUpdateAll() \
-     .whenNotMatchedInsertAll() \
-     .execute()
-    print("✅ Merged UPSERTED (idempotent)")
-else:
-    merged_df.write.format("delta").mode("overwrite").save(output_path)
-    print("✅ Merged CREATED (first run)")
+    # ✅ Drop partition/audit columns before merge to avoid duplicates
+    booking_df  = booking_df.drop("year", "month", "transformed_at")
+    customer_df = customer_df.drop("transformed_at")
+    cars_df     = cars_df.drop("transformed_at")
+    payments_df = payments_df.drop("transformed_at")
 
-total = spark.read.format("delta").load(output_path).count()
-print(f"✅ Merge complete | records: {total:,}")
+    merged_df = booking_df \
+        .join(customer_df, on="customer_id", how="left") \
+        .join(cars_df,     on="booking_id",  how="left") \
+        .join(payments_df, on="booking_id",  how="left") \
+        .withColumn("merged_at", current_timestamp())
+
+    output_path = delta_paths['merged']
+
+    # ✅ IDEMPOTENCY — MERGE on booking_id
+    if DeltaTable.isDeltaTable(spark, output_path):
+        delta_table = DeltaTable.forPath(spark, output_path)
+        delta_table.alias("target").merge(
+            merged_df.alias("source"),
+            "target.booking_id = source.booking_id"
+        ).whenMatchedUpdateAll() \
+         .whenNotMatchedInsertAll() \
+         .execute()
+        print("✅ Merged UPSERTED (idempotent)")
+    else:
+        merged_df.write.format("delta").mode("overwrite").save(output_path)
+        print("✅ Merged CREATED (first run)")
+
+    total = spark.read.format("delta").load(output_path).count()
+    print(f"✅ Merge complete | records: {total:,}")
+
+except Exception as e:
+    logger.error(f"❌ Merge Data FAILED: {e}")
+    spark.stop()
+    sys.exit(1)

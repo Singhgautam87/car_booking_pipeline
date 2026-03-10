@@ -212,7 +212,7 @@ app.index_string = '''<!DOCTYPE html>
 # ================================================================
 # LAYOUT
 # ================================================================
-TABS = ["tab-overview","tab-analytics","tab-ml","tab-pipeline","tab-quality","tab-debug"]
+TABS = ["tab-overview","tab-analytics","tab-observability","tab-pipeline","tab-quality","tab-debug"]
 
 app.layout = html.Div(
     style={"backgroundColor":BG,"minHeight":"100vh","display":"flex",
@@ -278,7 +278,7 @@ app.layout = html.Div(
                                           "paddingLeft":"4px"}),
                 html.Button("📊  overview",       id="tab-overview",  n_clicks=0, style=nav_style(True)),
                 html.Button("📈  analytics",      id="tab-analytics", n_clicks=0, style=nav_style(False)),
-                html.Button("🔭  observability",  id="tab-ml",        n_clicks=0, style=nav_style(False)),
+                html.Button("🔭  observability",  id="tab-observability", n_clicks=0, style=nav_style(False)),
                 html.Button("⚡  pipeline",       id="tab-pipeline",  n_clicks=0, style=nav_style(False)),
                 html.Button("🛡️  data quality",   id="tab-quality",   n_clicks=0, style=nav_style(False)),
                 html.Button("🐛  debug",          id="tab-debug",     n_clicks=0, style=nav_style(False)),
@@ -315,7 +315,7 @@ app.layout = html.Div(
                 # Each tab has its own div — only active one visible
                 html.Div(id="content-overview",    style={"display":"block"}),
                 html.Div(id="content-analytics",   style={"display":"none"}),
-                html.Div(id="content-ml",          style={"display":"none"}),
+                html.Div(id="content-observability", style={"display":"none"}),
                 html.Div(id="content-pipeline",    style={"display":"none"}),
                 html.Div(id="content-quality",     style={"display":"none"}),
                 html.Div(id="content-debug",       style={"display":"none"}),
@@ -429,20 +429,20 @@ def update_filters(booking_data):
 @app.callback(
     [Output("tab-overview",       "style"),
      Output("tab-analytics",      "style"),
-     Output("tab-ml",             "style"),
+     Output("tab-observability",  "style"),
      Output("tab-pipeline",       "style"),
      Output("tab-quality",        "style"),
      Output("tab-debug",          "style"),
      Output("content-overview",   "style"),
      Output("content-analytics",  "style"),
-     Output("content-ml",         "style"),
+     Output("content-observability", "style"),
      Output("content-pipeline",   "style"),
      Output("content-quality",    "style"),
      Output("content-debug",      "style"),
      Output("active-tab",         "data")],
     [Input("tab-overview",  "n_clicks"),
      Input("tab-analytics", "n_clicks"),
-     Input("tab-ml",        "n_clicks"),
+     Input("tab-observability", "n_clicks"),
      Input("tab-pipeline",  "n_clicks"),
      Input("tab-quality",   "n_clicks"),
      Input("tab-debug",     "n_clicks")],
@@ -718,7 +718,7 @@ def render_analytics(bk, loy_f, pay_f, ins_f, clr):
 # CB 6 — OBSERVABILITY: only booking store
 # ================================================================
 @app.callback(
-    Output("content-ml","children"),
+    Output("content-observability","children"),
     [Input("store-booking",   "data"),
      Input("filter-loyalty",  "value"),
      Input("filter-payment",  "value"),

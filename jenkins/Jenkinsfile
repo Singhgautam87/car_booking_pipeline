@@ -3,13 +3,17 @@ pipeline {
 
     environment {
         COMPOSE_FILE    = "docker-compose.yml"
-        COMPOSE_PROJECT = "car-booking-pipeline"
+        CONFIG_FILE     = "config/config.json"
+
+        // ✅ config.json se load — change karna ho toh sirf config.json update karo
+        COMPOSE_PROJECT = """${sh(script: "python3 -c \"import json; c=json.load(open('config/config.json')); print(c['project']['name'])\"", returnStdout: true).trim()}"""
+        ALERT_EMAIL     = """${sh(script: "python3 -c \"import json; c=json.load(open('config/config.json')); print(c['project']['alert_email'])\"", returnStdout: true).trim()}"""
+
         SPARK_SUBMIT    = "docker exec spark-master /opt/spark/bin/spark-submit"
-        SPARK_PACKAGES  = "org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.2,org.postgresql:postgresql:42.5.0,mysql:mysql-connector-java:8.0.33,org.apache.hadoop:hadoop-aws:3.3.4,io.delta:delta-core_2.12:2.4.0"
-        DELTA_CONF      = "--conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog"
-        S3_CONF         = "--conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 --conf spark.hadoop.fs.s3a.access.key=admin --conf spark.hadoop.fs.s3a.secret.key=admin123 --conf spark.hadoop.fs.s3a.path.style.access=true --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem"
-        SPARK_MEMORY    = "--driver-memory 2g --executor-memory 2g --conf spark.driver.maxResultSize=1g"
-        ALERT_EMAIL     = "your-email@gmail.com"   // ← apna Gmail yahan likhna
+        SPARK_PACKAGES  = """${sh(script: "python3 -c \"import json; c=json.load(open('config/config.json')); print(c['spark']['packages'])\"", returnStdout: true).trim()}"""
+        DELTA_CONF      = """${sh(script: "python3 -c \"import json; c=json.load(open('config/config.json')); s=c['spark']; print('--conf spark.sql.extensions='+s['delta_extension']+' --conf spark.sql.catalog.spark_catalog='+s['delta_catalog'])\"", returnStdout: true).trim()}"""
+        S3_CONF         = """${sh(script: "python3 -c \"import json; c=json.load(open('config/config.json')); m=c['minio']; print('--conf spark.hadoop.fs.s3a.endpoint='+m['endpoint']+' --conf spark.hadoop.fs.s3a.access.key='+m['access_key']+' --conf spark.hadoop.fs.s3a.secret.key='+m['secret_key']+' --conf spark.hadoop.fs.s3a.path.style.access=true --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem')\"", returnStdout: true).trim()}"""
+        SPARK_MEMORY    = """${sh(script: "python3 -c \"import json; c=json.load(open('config/config.json')); s=c['spark']; print('--driver-memory '+s['driver_memory']+' --executor-memory '+s['executor_memory']+' --conf spark.driver.maxResultSize='+s['max_result_size'])\"", returnStdout: true).trim()}"""
     }
 
     stages {
@@ -167,8 +171,6 @@ pipeline {
                         sleep 5
                     done
 
-                    docker exec great_expectations pip install kafka-python requests --quiet
-
                     docker cp kafka/producer_with_schema_registry.py great_expectations:/tmp/producer.py
                     docker cp kafka/data/car_booking.json great_expectations:/tmp/car_booking.json
                     docker exec great_expectations python /tmp/producer.py
@@ -272,7 +274,7 @@ pipeline {
                         RUN_ID=$(date +%Y%m%d_%H%M%S)
 
                         $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
-                            /opt/spark-apps/jobs/merge.py
+                            /opt/spark-apps/jobs/merge_data.py
 
                         STAGE_END=$(date +%s)
                         DURATION=$((STAGE_END - STAGE_START))
@@ -295,7 +297,7 @@ pipeline {
                         RUN_ID=$(date +%Y%m%d_%H%M%S)
 
                         $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
-                            /opt/spark-apps/jobs/write_to_postgres.py
+                            /opt/spark-apps/jobs/write_postgres.py
 
                         RECORD_COUNT=$(docker exec postgres psql -U admin -d booking -t -c \
                             "SELECT COUNT(*) FROM customer_booking_staging;" | tr -d ' ')
@@ -326,8 +328,6 @@ pipeline {
                     docker cp great_expectations/jobs/run_ge.py great_expectations:/ge/jobs/run_ge.py
                     docker cp great_expectations/great_expectations/expectations/customer_booking_suite.json \
                         great_expectations:/ge/great_expectations/expectations/customer_booking_suite.json
-
-                    docker exec great_expectations pip install mysql-connector-python psycopg2-binary sqlalchemy --quiet
 
                     docker exec mysql mysql -u admin -padmin booking -e "
                         DELETE FROM validation_results;

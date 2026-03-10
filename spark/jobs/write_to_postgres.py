@@ -18,27 +18,40 @@ spark = SparkSession.builder \
     .config("spark.jars", "/opt/spark/jars/postgresql-42.6.0.jar") \
     .getOrCreate()
 
-spark.sparkContext.setLogLevel("WARN")
 
-merged_df = spark.read.format("delta").load(delta_paths['merged'])
+import sys
+import logging
 
-# ✅ Drop audit columns before writing to PostgreSQL
-final_df = merged_df.drop("merged_at")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger(__name__)
 
-total = final_df.count()
-print(f"📦 Delta Lake se {total:,} records read kiye")
+try:
+    spark.sparkContext.setLogLevel("WARN")
 
-# ✅ IDEMPOTENCY — overwrite staging table (truncate + insert)
-# Staging table = always fresh data from Delta Lake
-final_df.write \
-    .format("jdbc") \
-    .option("url",                  config.get_postgres_jdbc_url()) \
-    .option("dbtable",              tables['staging']) \
-    .option("user",                 postgres_cfg['user']) \
-    .option("password",             postgres_cfg['password']) \
-    .option("driver",               postgres_cfg['driver']) \
-    .option("truncate",             "true") \
-    .mode("overwrite") \
-    .save()
+    merged_df = spark.read.format("delta").load(delta_paths['merged'])
 
-print(f"✅ PostgreSQL staging refreshed | table: {tables['staging']} | records: {total:,}")
+    # ✅ Drop audit columns before writing to PostgreSQL
+    final_df = merged_df.drop("merged_at")
+
+    total = final_df.count()
+    print(f"📦 Delta Lake se {total:,} records read kiye")
+
+    # ✅ IDEMPOTENCY — overwrite staging table (truncate + insert)
+    # Staging table = always fresh data from Delta Lake
+    final_df.write \
+        .format("jdbc") \
+        .option("url",                  config.get_postgres_jdbc_url()) \
+        .option("dbtable",              tables['staging']) \
+        .option("user",                 postgres_cfg['user']) \
+        .option("password",             postgres_cfg['password']) \
+        .option("driver",               postgres_cfg['driver']) \
+        .option("truncate",             "true") \
+        .mode("overwrite") \
+        .save()
+
+    print(f"✅ PostgreSQL staging refreshed | table: {tables['staging']} | records: {total:,}")
+
+except Exception as e:
+    logger.error(f"❌ Write Postgres FAILED: {e}")
+    spark.stop()
+    sys.exit(1)

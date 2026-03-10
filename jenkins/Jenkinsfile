@@ -35,6 +35,8 @@ pipeline {
                     docker volume rm car-booking-pipeline_postgres_data || true
                     docker image prune -f || true
                     rm -rf /tmp/ge_* /tmp/spark_* /tmp/producer.py /tmp/car_booking.json || true
+                    # ✅ GE image rebuild karo — naya Dockerfile (kafka-python included)
+                    docker-compose -p ${COMPOSE_PROJECT} build --no-cache great_expectations
                     echo "✅ Cleanup complete!"
                 '''
             }
@@ -124,12 +126,15 @@ pipeline {
                     RUN_ID=$(date +%Y%m%d_%H%M%S)
 
                     # ✅ Schema Registry mein car-bookings schema register karo
-                    RESPONSE=$(curl -s -o /tmp/schema_response.json -w "%{http_code}" \
-                        -X POST http://schema-registry:8081/subjects/car-bookings-value/versions \
+                    # docker exec use karo — Jenkins host schema-registry network mein nahi hai
+                    RESPONSE=$(docker exec schema-registry curl -s -o /tmp/schema_response.json -w "%{http_code}" \
+                        -X POST http://localhost:8081/subjects/car-bookings-value/versions \
                         -H "Content-Type: application/vnd.schemaregistry.v1+json" \
                         -d '{
                             "schema": "{\"type\":\"record\",\"name\":\"CarBooking\",\"namespace\":\"com.carbooking\",\"fields\":[{\"name\":\"booking_id\",\"type\":\"string\"},{\"name\":\"customer_id\",\"type\":\"string\"},{\"name\":\"customer_name\",\"type\":\"string\"},{\"name\":\"car_id\",\"type\":\"string\"},{\"name\":\"model\",\"type\":\"string\"},{\"name\":\"category\",\"type\":\"string\"},{\"name\":\"pickup_location\",\"type\":\"string\"},{\"name\":\"drop_location\",\"type\":\"string\"},{\"name\":\"booking_date\",\"type\":\"string\"},{\"name\":\"return_date\",\"type\":\"string\"},{\"name\":\"price_per_day\",\"type\":\"double\"},{\"name\":\"rental_days\",\"type\":\"int\"},{\"name\":\"payment_amount\",\"type\":\"double\"},{\"name\":\"payment_method\",\"type\":\"string\"},{\"name\":\"payment_id\",\"type\":\"string\"},{\"name\":\"loyalty_tier\",\"type\":\"string\"},{\"name\":\"insurance_coverage\",\"type\":\"string\"},{\"name\":\"status\",\"type\":\"string\"},{\"name\":\"event_timestamp\",\"type\":\"string\"}]}"
                         }')
+                    # Response schema-registry container mein save hua — host pe copy karo
+                    docker cp schema-registry:/tmp/schema_response.json /tmp/schema_response.json 2>/dev/null || echo "{}" > /tmp/schema_response.json
 
                     SCHEMA_ID=$(cat /tmp/schema_response.json | python3 -c \
                         "import json,sys; d=json.load(sys.stdin); print(d.get('id','1'))" 2>/dev/null || echo "1")

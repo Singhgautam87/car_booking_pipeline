@@ -279,7 +279,7 @@ pipeline {
                         RUN_ID=$(date +%Y%m%d_%H%M%S)
 
                         $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
-                            /opt/spark-apps/jobs/merge_data.py
+                            /opt/spark-apps/jobs/merge.py
 
                         STAGE_END=$(date +%s)
                         DURATION=$((STAGE_END - STAGE_START))
@@ -302,7 +302,7 @@ pipeline {
                         RUN_ID=$(date +%Y%m%d_%H%M%S)
 
                         $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
-                            /opt/spark-apps/jobs/write_postgres.py
+                            /opt/spark-apps/jobs/write_to_postgres.py
 
                         RECORD_COUNT=$(docker exec postgres psql -U admin -d booking -t -c \
                             "SELECT COUNT(*) FROM customer_booking_staging;" | tr -d ' ')

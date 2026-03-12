@@ -24,9 +24,16 @@ services:
     image: confluentinc/cp-zookeeper:7.5.0
     container_name: zookeeper
     restart: unless-stopped
+    mem_limit: 512m
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_HEAP_OPTS: "-Xmx256M -Xms256M"
+    healthcheck:
+      test: ["CMD-SHELL", "echo ruok | nc localhost 2181 | grep imok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     networks:
       - car-booking-network
 
@@ -35,8 +42,10 @@ services:
     image: confluentinc/cp-kafka:7.5.0
     container_name: kafka
     restart: unless-stopped
+    mem_limit: 1g
     depends_on:
-      - zookeeper
+      zookeeper:
+        condition: service_healthy
     ports:
       - "9092:9092"
     environment:
@@ -46,6 +55,7 @@ services:
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT_INTERNAL
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_LOG_RETENTION_HOURS: 24
       KAFKA_HEAP_OPTS: "-Xmx512M -Xms256M"
     healthcheck:
       test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092 || exit 1"]
@@ -56,13 +66,15 @@ services:
     networks:
       - car-booking-network
 
-  # ── SCHEMA REGISTRY ── NEW ─────────────────────────────────────
+  # ── SCHEMA REGISTRY ────────────────────────────────────────────
   schema-registry:
     image: confluentinc/cp-schema-registry:7.5.0
     container_name: schema-registry
     restart: unless-stopped
+    mem_limit: 512m
     depends_on:
-      - kafka
+      kafka:
+        condition: service_healthy
     ports:
       - "8085:8081"
     environment:
@@ -76,6 +88,7 @@ services:
       interval: 15s
       timeout: 10s
       retries: 5
+      start_period: 30s
     networks:
       - car-booking-network
 
@@ -84,6 +97,7 @@ services:
     image: provectuslabs/kafka-ui:latest
     container_name: kafka-ui
     restart: unless-stopped
+    mem_limit: 512m
     ports:
       - "8081:8080"
     environment:
@@ -92,8 +106,8 @@ services:
       - KAFKA_CLUSTERS_0_ZOOKEEPER=zookeeper:2181
       - KAFKA_CLUSTERS_0_SCHEMAREGISTRY=http://schema-registry:8081
     depends_on:
-      - kafka
-      - schema-registry
+      kafka:
+        condition: service_healthy
     networks:
       - car-booking-network
 
@@ -102,15 +116,26 @@ services:
     image: apache/spark:3.4.2
     container_name: spark-master
     restart: unless-stopped
+    mem_limit: 4g
+    memswap_limit: 4g
     ports:
       - "8082:8080"
       - "7077:7077"
       - "4040:4040"
     depends_on:
-      - kafka
+      kafka:
+        condition: service_healthy
     volumes:
       - ./reports:/opt/reports
+      - ./config:/opt/config:ro          # config_loader.py reads /opt/config/config.json
+      - ./spark/lib:/opt/spark-apps/lib  # config_loader.py available inside container
     command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
     networks:
       - car-booking-network
 
@@ -119,6 +144,7 @@ services:
     image: minio/minio
     container_name: minio
     restart: unless-stopped
+    mem_limit: 1g
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -126,6 +152,14 @@ services:
       MINIO_ROOT_USER: admin
       MINIO_ROOT_PASSWORD: admin123
     command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data              # ✅ data persists across restarts
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
     networks:
       - car-booking-network
 
@@ -134,6 +168,7 @@ services:
     image: postgres:15
     container_name: postgres
     restart: unless-stopped
+    mem_limit: 1g
     environment:
       POSTGRES_DB: booking
       POSTGRES_USER: admin
@@ -144,6 +179,12 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d booking"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
     networks:
       - car-booking-network
 
@@ -152,6 +193,7 @@ services:
     image: mysql:8
     container_name: mysql
     restart: unless-stopped
+    mem_limit: 1g
     environment:
       MYSQL_DATABASE: booking
       MYSQL_USER: admin
@@ -161,6 +203,12 @@ services:
       - "3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-u", "admin", "-padmin"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     networks:
       - car-booking-network
 
@@ -169,13 +217,17 @@ services:
     build: ./great_expectations
     container_name: great_expectations
     restart: "no"
+    mem_limit: 1g
     volumes:
       - ./great_expectations:/ge
       - ./reports:/opt/reports
-      - ./spark/lib:/opt/spark/lib
+      - ./spark/lib:/opt/spark/lib      # config_loader.py
+      - ./config:/opt/config:ro         # config.json
     depends_on:
-      - postgres
-      - mysql
+      postgres:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
     command: tail -f /dev/null
     healthcheck:
       test: ["CMD", "python", "-c", "import great_expectations"]
@@ -185,21 +237,60 @@ services:
     networks:
       - car-booking-network
 
+  # ── MLFLOW ─────────────────────────────────────────────────────
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:latest
+    container_name: mlflow
+    restart: unless-stopped
+    mem_limit: 512m
+    ports:
+      - "5000:5000"
+    command: >
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri sqlite:///mlflow.db
+      --default-artifact-root /mlflow/artifacts
+    volumes:
+      - mlflow_data:/mlflow
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    networks:
+      - car-booking-network
+
   # ── DASHBOARD ──────────────────────────────────────────────────
   dashboard:
     build:
       context: ./realtime_dashboard
       dockerfile: Dockerfile
     container_name: dashboard
+    restart: "no"
+    mem_limit: 1g
     ports:
       - "8050:8050"
     environment:
       - MYSQL_HOST=mysql
       - POSTGRES_HOST=postgres
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}   # Claude AI chat — optional
+      - LANGSMITH_API_KEY=${LANGSMITH_API_KEY:-}   # LangSmith monitoring — optional
+      - MLFLOW_TRACKING_URI=http://mlflow:5000     # MLflow model tracking
+    volumes:
+      - ./config:/opt/config:ro                    # config_loader.py access
     depends_on:
-      - mysql
-      - postgres
-    restart: "no"
+      postgres:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8050"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
     networks:
       - car-booking-network
 
@@ -210,4 +301,6 @@ networks:
 volumes:
   postgres_data:
   mysql_data:
+  minio_data:     # ✅ minio data persists (Delta Lake files safe)
+  mlflow_data:    # ✅ MLflow experiments + model artifacts
   jenkins_home:

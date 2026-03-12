@@ -1,5 +1,4 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import hour, to_timestamp
 import sys, os, logging
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'lib'))
@@ -18,7 +17,6 @@ spark = SparkSession.builder \
     .config("spark.hadoop.fs.s3a.access.key",        minio_cfg['access_key']) \
     .config("spark.hadoop.fs.s3a.secret.key",        minio_cfg['secret_key']) \
     .config("spark.hadoop.fs.s3a.path.style.access", str(minio_cfg['path_style']).lower()) \
-    .config("spark.jars",                            spark_cfg['postgresql_jar']) \
     .getOrCreate()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -29,9 +27,8 @@ try:
 
     merged_df = spark.read.format("delta").load(delta_paths['merged'])
 
-    # ✅ pickup_hour derive karo + audit column drop karo
-    final_df = merged_df.drop("merged_at") \
-        .withColumn("pickup_hour", hour(to_timestamp("pickup_time", "HH:mm:ss")))
+    # ✅ Sirf merged_at drop karo — baaki saare 36 columns staging mein jayenge
+    final_df = merged_df.drop("merged_at")
 
     total = final_df.count()
     print(f"📦 Delta Lake se {total:,} records read kiye")

@@ -226,7 +226,7 @@ services:
       - ./great_expectations:/ge
       - ./reports:/opt/reports
       - ./spark/lib:/opt/spark/lib      # config_loader.py
-      - ./config:/opt/config:ro         # config.json
+      - ./config:/opt/config         # config.json
     depends_on:
       postgres:
         condition: service_healthy
@@ -283,7 +283,7 @@ services:
       - LANGSMITH_API_KEY=${LANGSMITH_API_KEY:-}   # LangSmith monitoring — optional
       - MLFLOW_TRACKING_URI=http://mlflow:5000     # MLflow model tracking
     volumes:
-      - ./config:/opt/config:ro                    # config_loader.py access
+      - ./config:/opt/config                    # config_loader.py access
     depends_on:
       postgres:
         condition: service_healthy

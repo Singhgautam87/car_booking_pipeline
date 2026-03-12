@@ -131,7 +131,7 @@ services:
         condition: service_healthy
     volumes:
       - ./reports:/opt/reports
-      - ./config:/opt/config:ro          # config_loader.py reads /opt/config/config.json
+      - ./config:/opt/config         # config_loader.py reads /opt/config/config.json
       - ./spark/lib:/opt/spark-apps/lib  # config_loader.py available inside container
     command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
     healthcheck:

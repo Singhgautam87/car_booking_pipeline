@@ -6,6 +6,10 @@ services:
     container_name: jenkins
     restart: unless-stopped
     user: root
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+
     ports:
       - "8080:8080"
       - "50000:50000"

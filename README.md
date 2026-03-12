@@ -164,7 +164,7 @@ cd car-booking-pipeline
 // config/config.json
 {
   "project": {
-    "alert_email": "your-email@gmail.com"   ← apna email
+    "alert_email": "your-email@gmail.com"  
   }
 }
 ```

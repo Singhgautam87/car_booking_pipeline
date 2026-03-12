@@ -43,9 +43,9 @@
   },
 
   "spark": {
-    "driver_memory": "2g",
-    "executor_memory": "2g",
-    "max_result_size": "1g",
+    "driver_memory": "512m",
+    "executor_memory": "512m",
+    "max_result_size": "256m",
     "packages": "org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.2,org.postgresql:postgresql:42.5.0,mysql:mysql-connector-java:8.0.33,org.apache.hadoop:hadoop-aws:3.3.4,io.delta:delta-core_2.12:2.4.0",
     "delta_extension": "io.delta.sql.DeltaSparkSessionExtension",
     "delta_catalog": "org.apache.spark.sql.delta.catalog.DeltaCatalog",

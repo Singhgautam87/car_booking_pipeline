@@ -18,8 +18,8 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - JAVA_OPTS=-Xmx1g -Xms512m -XX:+UseG1GC
-    mem_limit: 2g
-    memswap_limit: 2g
+    mem_limit: 1.5g
+    memswap_limit: 1.5g
     networks:
       - car-booking-network
 
@@ -120,8 +120,8 @@ services:
     image: apache/spark:3.4.2
     container_name: spark-master
     restart: unless-stopped
-    mem_limit: 4g
-    memswap_limit: 4g
+    mem_limit: 1.5g
+    memswap_limit: 1.5g
     ports:
       - "8082:8080"
       - "7077:7077"

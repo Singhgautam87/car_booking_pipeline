@@ -40,6 +40,10 @@ class ConfigLoader:
     def get_mysql_config(self):
         """Get MySQL configuration"""
         return self.config['mysql']
+
+    def get_spark_config(self):
+        """Get Spark configuration"""
+        return self.config['spark']
     
     def get_delta_paths(self):
         """Get Delta Lake paths"""

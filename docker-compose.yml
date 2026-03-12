@@ -120,8 +120,8 @@ services:
     image: apache/spark:3.4.2
     container_name: spark-master
     restart: unless-stopped
-    mem_limit: 1.5g
-    memswap_limit: 1.5g
+    mem_limit: 2.5g
+    memswap_limit: 2.5g
     ports:
       - "8082:8080"
       - "7077:7077"

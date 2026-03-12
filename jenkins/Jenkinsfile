@@ -262,14 +262,16 @@ pipeline {
         }
 
         // ── TRANSFORM (Silver Layer) — PARALLEL ─────────────────
-        // ✅ 4 transforms run in parallel — saves ~60% time vs sequential
+        // ✅ 4 transforms run in parallel — cores.max=1 per job prevents OOM
         stage('Transform Data') {
             parallel {
                 stage('Transform · Customer') {
                     steps {
-                        timeout(time: 15, unit: 'MINUTES') {
+                        timeout(time: 30, unit: 'MINUTES') {
                             sh '''
                                 $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
+                                    --conf spark.cores.max=1 \
+                                    --conf spark.sql.shuffle.partitions=2 \
                                     /opt/spark-apps/jobs/transform_customer.py
                                 echo "✅ Customer transform done"
                             '''
@@ -278,9 +280,11 @@ pipeline {
                 }
                 stage('Transform · Booking') {
                     steps {
-                        timeout(time: 15, unit: 'MINUTES') {
+                        timeout(time: 30, unit: 'MINUTES') {
                             sh '''
                                 $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
+                                    --conf spark.cores.max=1 \
+                                    --conf spark.sql.shuffle.partitions=2 \
                                     /opt/spark-apps/jobs/transform_booking.py
                                 echo "✅ Booking transform done"
                             '''
@@ -289,9 +293,11 @@ pipeline {
                 }
                 stage('Transform · Cars') {
                     steps {
-                        timeout(time: 15, unit: 'MINUTES') {
+                        timeout(time: 30, unit: 'MINUTES') {
                             sh '''
                                 $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
+                                    --conf spark.cores.max=1 \
+                                    --conf spark.sql.shuffle.partitions=2 \
                                     /opt/spark-apps/jobs/transform_cars.py
                                 echo "✅ Cars transform done"
                             '''
@@ -300,9 +306,11 @@ pipeline {
                 }
                 stage('Transform · Payments') {
                     steps {
-                        timeout(time: 15, unit: 'MINUTES') {
+                        timeout(time: 30, unit: 'MINUTES') {
                             sh '''
                                 $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
+                                    --conf spark.cores.max=1 \
+                                    --conf spark.sql.shuffle.partitions=2 \
                                     /opt/spark-apps/jobs/transform_payments.py
                                 echo "✅ Payments transform done"
                             '''

@@ -1,9 +1,11 @@
 """
-Car Booking Pipeline Dashboard — v2
-Architecture : dcc.Store → tab-specific callbacks → no unnecessary re-renders
+Car Booking Pipeline Dashboard — v3
+Architecture : dcc.Store → tab-specific callbacks → lazy tab loading
 Stack        : Kafka → Spark → Delta Lake → PostgreSQL → Dash
-New in v2    : AI·ML tab (Prophet/IsoForest/XGBoost), Route Intelligence tab,
-               36-column analytics, AI chat (TextToSQLAgent fallback)
+New in v3    : BLANK SCREEN FIX — aggregated queries, not SELECT *
+               Weighted Health Score 0-100
+               AI Auto-Insights on page load
+               GE failed records → Claude root cause analysis
 """
 import os
 import json
@@ -19,17 +21,104 @@ from sqlalchemy import create_engine
 # ================================================================
 # DB CONNECTIONS
 # ================================================================
-def get_booking_data():
+def get_pg_engine():
     host = os.getenv("POSTGRES_HOST", "postgres")
+    return create_engine(
+        f"postgresql+psycopg2://admin:admin@{host}:5432/booking",
+        pool_pre_ping=True)
+
+def get_mysql_engine():
+    host = os.getenv("MYSQL_HOST", "mysql")
+    return create_engine(
+        f"mysql+mysqlconnector://admin:admin@{host}:3306/booking",
+        pool_pre_ping=True)
+
+def get_booking_data():
+    """
+    FIX: Aggregated summaries only — not SELECT * 30k rows
+    Full data fetched per-tab only when needed (lazy loading)
+    """
     try:
-        engine = create_engine(
-            f"postgresql+psycopg2://admin:admin@{host}:5432/booking",
-            pool_pre_ping=True)
-        df = pd.read_sql("SELECT * FROM customer_booking_staging", engine)
+        engine = get_pg_engine()
+        kpi = pd.read_sql("""
+            SELECT COUNT(*) AS total_bookings,
+                   COUNT(DISTINCT customer_id) AS total_customers,
+                   ROUND(SUM(payment_amount)::numeric,0) AS total_revenue,
+                   SUM(is_high_value_customer::int) AS high_value_customers,
+                   SUM(is_digital_payment::int) AS digital_payments,
+                   COUNT(DISTINCT route) AS unique_routes,
+                   COUNT(DISTINCT car_segment) AS car_segments,
+                   COUNT(DISTINCT model) AS car_models
+            FROM customer_booking_staging
+        """, engine)
+        daily = pd.read_sql("""
+            SELECT booking_date::date AS booking_date,
+                   COUNT(*) AS bookings,
+                   ROUND(SUM(payment_amount)::numeric,0) AS revenue
+            FROM customer_booking_staging
+            GROUP BY booking_date::date ORDER BY booking_date
+        """, engine)
+        segments = pd.read_sql("""
+            SELECT car_segment, COUNT(*) AS bookings
+            FROM customer_booking_staging
+            GROUP BY car_segment ORDER BY bookings DESC
+        """, engine)
+        top_cars = pd.read_sql("""
+            SELECT model, ROUND(SUM(payment_amount)::numeric,0) AS revenue
+            FROM customer_booking_staging
+            GROUP BY model ORDER BY revenue DESC LIMIT 7
+        """, engine)
+        payments = pd.read_sql("""
+            SELECT payment_method, COUNT(*) AS bookings,
+                   ROUND(SUM(payment_amount)::numeric,0) AS revenue
+            FROM customer_booking_staging
+            GROUP BY payment_method ORDER BY bookings DESC
+        """, engine)
+        loyalty = pd.read_sql("""
+            SELECT loyalty_tier, COUNT(*) AS bookings,
+                   SUM(is_high_value_customer::int) AS high_value
+            FROM customer_booking_staging
+            GROUP BY loyalty_tier ORDER BY bookings DESC
+        """, engine)
+        heatmap = pd.read_sql("""
+            SELECT TO_CHAR(booking_date, 'Mon') AS month,
+                   TRIM(TO_CHAR(booking_date, 'Day')) AS dow,
+                   COUNT(*) AS bookings
+            FROM customer_booking_staging
+            GROUP BY TO_CHAR(booking_date, 'Mon'), TRIM(TO_CHAR(booking_date, 'Day'))
+        """, engine)
+        engine.dispose()
+        return {
+            "kpi": kpi.to_dict("records"),
+            "daily": daily.to_dict("records"),
+            "segments": segments.to_dict("records"),
+            "top_cars": top_cars.to_dict("records"),
+            "payments": payments.to_dict("records"),
+            "loyalty": loyalty.to_dict("records"),
+            "heatmap": heatmap.to_dict("records"),
+        }
+    except Exception as e:
+        print(f"[POSTGRES ERROR] {e}")
+        return {}
+
+def get_tab_data(tab: str) -> pd.DataFrame:
+    """Lazy load — full data only for active tab"""
+    try:
+        engine = get_pg_engine()
+        queries = {
+            "analytics": "SELECT booking_date, payment_amount, booking_id, amount_tier, model, price_per_day, insurance_coverage, insurer_type, loyalty_tier, payment_method FROM customer_booking_staging",
+            "routes": "SELECT route, trip_type, car_segment, booking_id, payment_amount, pickup_hour, pickup_slot, booking_date, amount_tier FROM customer_booking_staging",
+            "observability": "SELECT booking_date, booking_id, customer_id, pickup_hour, payment_amount FROM customer_booking_staging",
+        }
+        if tab not in queries:
+            engine.dispose()
+            return pd.DataFrame()
+        df = pd.read_sql(queries[tab], engine)
         engine.dispose()
         return df
     except Exception as e:
-        print(f"[POSTGRES ERROR] {e}"); return pd.DataFrame()
+        print(f"[TAB DATA ERROR] {tab}: {e}")
+        return pd.DataFrame()
 
 def get_monitoring_data():
     host = os.getenv("MYSQL_HOST", "mysql")
@@ -337,15 +426,18 @@ app.layout = html.Div(
 def refresh_store(n, clicks):
     now = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
     try:
-        df                                                  = get_booking_data()
+        # FIX: get_booking_data now returns aggregated dict, not full dataframe
+        booking_dict                                        = get_booking_data()
         val_df, exp_df, fail_df, sla_df, alerts_df, sch_df = get_monitoring_data()
         forecast_df, fraud_df, churn_df                    = get_ml_data()
         ml_ok  = not forecast_df.empty or not fraud_df.empty or not churn_df.empty
-        status = (f"✦ {len(df):,} records · "
-                  f"{'✓ pg' if not df.empty else '✗ pg'} "
+        kpi_data = booking_dict.get("kpi", [{}])
+        total_records = kpi_data[0].get("total_bookings", 0) if kpi_data else 0
+        status = (f"✦ {total_records:,} records · "
+                  f"{'✓ pg' if booking_dict else '✗ pg'} "
                   f"{'✓ mysql' if not val_df.empty else '✗ mysql'} "
                   f"{'✓ ml' if ml_ok else '○ ml'}")
-        return (df.to_dict("records")          if not df.empty          else [],
+        return (booking_dict,
                 val_df.to_dict("records")      if not val_df.empty      else [],
                 exp_df.to_dict("records")      if not exp_df.empty      else [],
                 fail_df.to_dict("records")     if not fail_df.empty     else [],
@@ -357,7 +449,7 @@ def refresh_store(n, clicks):
                 churn_df.to_dict("records")    if not churn_df.empty    else [],
                 f"↻ {now}", status)
     except Exception as e:
-        return [], [], [], [], [], [], [], [], [], [], f"↻ {now}", f"✗ {str(e)[:40]}"
+        return {}, [], [], [], [], [], [], [], [], [], f"↻ {now}", f"✗ {str(e)[:40]}"
 
 
 # ================================================================
@@ -389,19 +481,37 @@ def update_alert_badge(alerts_data):
     Input("store-booking","data"),
 )
 def update_filters(booking_data):
-    df = safe_df(booking_data)
-    def opts(col):
-        if df.empty or col not in df.columns: return []
-        return [{"label":v,"value":v} for v in sorted(df[col].dropna().unique())]
+    # booking_data is now a dict of aggregated data
+    if not booking_data or not isinstance(booking_data, dict):
+        return [], [], [], [], html.Div("no data")
+
+    kpi = booking_data.get("kpi", [{}])[0] if booking_data.get("kpi") else {}
+    loyalty_df  = safe_df(booking_data.get("loyalty", []))
+    payments_df = safe_df(booking_data.get("payments", []))
+    segments_df = safe_df(booking_data.get("segments", []))
+
+    # Options from aggregated data
+    loy_opts = [{"label":v,"value":v} for v in sorted(loyalty_df["loyalty_tier"].dropna().unique())]                if not loyalty_df.empty and "loyalty_tier" in loyalty_df.columns else []
+    pay_opts = [{"label":v,"value":v} for v in sorted(payments_df["payment_method"].dropna().unique())]                if not payments_df.empty and "payment_method" in payments_df.columns else []
+    seg_opts = [{"label":v,"value":v} for v in sorted(segments_df["car_segment"].dropna().unique())]                if not segments_df.empty and "car_segment" in segments_df.columns else []
+
+    # Trip types — fetch quickly
+    try:
+        engine = get_pg_engine()
+        trips = pd.read_sql("SELECT DISTINCT trip_type FROM customer_booking_staging WHERE trip_type IS NOT NULL", engine)
+        engine.dispose()
+        trip_opts = [{"label":v,"value":v} for v in sorted(trips["trip_type"].tolist())]
+    except Exception:
+        trip_opts = []
+
     meta_lines = [
-        f"records: {len(df):,}",
-        f"columns: {len(df.columns)}",
-        f"bookings: {df['booking_id'].nunique():,}"   if "booking_id"   in df.columns else "",
-        f"customers: {df['customer_id'].nunique():,}" if "customer_id"  in df.columns else "",
-        f"routes: {df['route'].nunique():,}"          if "route"        in df.columns else "",
-        f"segments: {df['car_segment'].nunique():,}"  if "car_segment"  in df.columns else "",
+        f"records: {kpi.get('total_bookings', 0):,}",
+        f"customers: {kpi.get('total_customers', 0):,}",
+        f"routes: {kpi.get('unique_routes', 0):,}",
+        f"segments: {kpi.get('car_segments', 0):,}",
+        f"models: {kpi.get('car_models', 0):,}",
     ]
-    return (opts("loyalty_tier"), opts("payment_method"), opts("trip_type"), opts("car_segment"),
+    return (loy_opts, pay_opts, trip_opts, seg_opts,
             html.Div([html.Div(l) for l in meta_lines if l]))
 
 
@@ -447,33 +557,51 @@ def switch_tab(ov,an,ro,ob,pi,qu,ai,de, current):
      Input("clear-filters","n_clicks")],
 )
 def render_overview(bk, sla, val, alerts, loy_f, pay_f, trip_f, seg_f, clr):
-    if not bk:
+    if not bk or not isinstance(bk, dict):
         return html.Div("[ loading data... ]",
                         style={"color":MUT,"fontFamily":MONO,"fontSize":"12px","padding":"60px","textAlign":"center"})
-    df_raw    = safe_df(bk)
-    df        = _apply_filters(df_raw, loy_f, pay_f, trip_f, seg_f)
-    fbadge    = _filter_badge(df, df_raw)
-    sla_df    = safe_df(sla)
-    val_df    = safe_df(val)
-    alerts_df = safe_df(alerts)
 
-    total_b    = df["booking_id"].nunique()     if not df.empty and "booking_id"      in df.columns else 0
-    total_c    = df["customer_id"].nunique()    if not df.empty and "customer_id"     in df.columns else 0
-    total_rev  = df["payment_amount"].sum()     if not df.empty and "payment_amount"  in df.columns else 0
-    high_value = int(df["is_high_value_customer"].sum()) if not df.empty and "is_high_value_customer" in df.columns else 0
-    digital    = int(df["is_digital_payment"].sum())     if not df.empty and "is_digital_payment"     in df.columns else 0
-    dq_score   = val_df["success_rate"].mean()  if not val_df.empty and "success_rate" in val_df.columns else 0
+    # Extract aggregated data from dict
+    kpi_data   = bk.get("kpi", [{}])
+    kpi        = kpi_data[0] if kpi_data else {}
+    daily_df   = safe_df(bk.get("daily", []))
+    seg_df     = safe_df(bk.get("segments", []))
+    cars_df    = safe_df(bk.get("top_cars", []))
+    pay_df     = safe_df(bk.get("payments", []))
+    loy_df     = safe_df(bk.get("loyalty", []))
+    heat_df    = safe_df(bk.get("heatmap", []))
+    sla_df     = safe_df(sla)
+    val_df     = safe_df(val)
+    alerts_df  = safe_df(alerts)
+
+    total_b    = int(kpi.get("total_bookings", 0))
+    total_c    = int(kpi.get("total_customers", 0))
+    total_rev  = float(kpi.get("total_revenue", 0))
+    high_value = int(kpi.get("high_value_customers", 0))
+    digital    = int(kpi.get("digital_payments", 0))
+    dq_score   = float(val_df["success_rate"].mean()) if not val_df.empty and "success_rate" in val_df.columns else 0
     p_ok       = not sla_df.empty and len(sla_df[sla_df["status"]=="FAILED"])==0
-    failures   = len(alerts_df[alerts_df["alert_type"]=="FAILURE"])   if not alerts_df.empty and "alert_type" in alerts_df.columns else 0
+    failures   = len(alerts_df[alerts_df["alert_type"]=="FAILURE"])    if not alerts_df.empty and "alert_type" in alerts_df.columns else 0
     warnings   = len(alerts_df[alerts_df["alert_type"]=="DQ_WARNING"]) if not alerts_df.empty and "alert_type" in alerts_df.columns else 0
-    digital_pct= digital/len(df)*100 if len(df)>0 else 0
+    digital_pct= digital/total_b*100 if total_b > 0 else 0
 
-    # Revenue sparkline
-    if not df.empty and "booking_date" in df.columns:
-        rd = df.groupby("booking_date")["payment_amount"].sum().reset_index()
+    # Weighted Health Score 0-100
+    health_score = 100
+    if not sla_df.empty and "status" in sla_df.columns:
+        failed_stages = len(sla_df[sla_df["status"] == "FAILED"])
+        health_score -= failed_stages * 15
+    health_score -= failures * 10
+    health_score -= max(0, (90 - dq_score) * 0.5)
+    health_score = max(0, min(100, round(health_score)))
+    health_color = C2 if health_score >= 90 else (C5 if health_score >= 70 else C3)
+
+    fbadge = html.Span(f"[ {total_b:,} records ]", style={"color":MUT,"fontSize":"10px","fontFamily":MONO})
+
+    # Revenue sparkline — from daily aggregated data
+    if not daily_df.empty and "booking_date" in daily_df.columns:
         fig_spark = go.Figure()
         fig_spark.add_trace(go.Scatter(
-            x=rd["booking_date"], y=rd["payment_amount"], mode="lines",
+            x=daily_df["booking_date"], y=daily_df["revenue"], mode="lines",
             fill="tozeroy", line=dict(color=C2, width=2),
             fillcolor="rgba(0,255,136,0.05)"))
         fig_spark.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
@@ -484,46 +612,71 @@ def render_overview(bk, sla, val, alerts, loy_f, pay_f, trip_f, seg_f, clr):
     else:
         fig_spark = empty("revenue — no data"); fig_spark.update_layout(height=110)
 
-    # Car segment donut
-    if not df.empty and "car_segment" in df.columns:
-        cs = df.groupby("car_segment")["booking_id"].count().reset_index()
-        fig_seg = px.pie(cs, names="car_segment", values="booking_id",
+    # Car segment donut — from segments aggregated data
+    if not seg_df.empty and "car_segment" in seg_df.columns:
+        fig_seg = px.pie(seg_df, names="car_segment", values="bookings",
                           title="car segment mix", hole=0.6,
                           color_discrete_sequence=[C1,C2,C4,C5,C7])
         fig_seg.update_layout(**CBASE, height=260)
     else:
         fig_seg = empty("car segments"); fig_seg.update_layout(height=260)
 
-    # Top cars by revenue
-    if not df.empty and "model" in df.columns:
-        tc = df.groupby("model")["payment_amount"].sum().nlargest(7).reset_index()
+    # Top cars by revenue — from top_cars aggregated data
+    if not cars_df.empty and "model" in cars_df.columns:
         fig_cars = go.Figure(go.Bar(
-            x=tc["payment_amount"], y=tc["model"], orientation="h",
-            marker=dict(color=tc["payment_amount"],
+            x=cars_df["revenue"], y=cars_df["model"], orientation="h",
+            marker=dict(color=cars_df["revenue"],
                         colorscale=[[0,"#0f2027"],[0.5,C1],[1,C4]], showscale=False),
-            text=[f"₹{v:,.0f}" for v in tc["payment_amount"]],
+            text=[f"₹{v:,.0f}" for v in cars_df["revenue"]],
             textposition="outside", textfont=dict(color=SUB,size=9,family=MONO)))
         fig_cars.update_layout(**CBASE, title="top cars · revenue", height=260,
                                xaxis=AXIS, yaxis={"categoryorder":"total ascending"})
     else:
         fig_cars = empty("top cars"); fig_cars.update_layout(height=260)
 
-    # Heatmap
-    if not df.empty and "booking_date" in df.columns:
-        d2 = df.copy(); d2["booking_date"] = pd.to_datetime(d2["booking_date"])
-        d2["dow"]   = d2["booking_date"].dt.day_name()
-        d2["month"] = d2["booking_date"].dt.strftime("%b")
-        ht = d2.groupby(["month","dow"])["booking_id"].count().reset_index()
-        ht.columns = ["Month","Day","Count"]
-        ht["Day"] = pd.Categorical(ht["Day"],
+    # Heatmap — from pre-aggregated heatmap data
+    if not heat_df.empty and "month" in heat_df.columns:
+        ht = heat_df.copy()
+        ht["dow"] = pd.Categorical(ht["dow"],
             categories=["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"], ordered=True)
-        ht = ht.sort_values("Day")
-        fig_heat = px.density_heatmap(ht, x="Month", y="Day", z="Count",
+        ht = ht.sort_values("dow")
+        fig_heat = px.density_heatmap(ht, x="month", y="dow", z="bookings",
                                        title="heatmap · month × day of week",
                                        color_continuous_scale=[[0,BG],[0.4,C1],[1,C4]])
         fig_heat.update_layout(**CBASE, xaxis=AXIS, yaxis=AXIS, coloraxis_showscale=False, height=250)
     else:
         fig_heat = empty("heatmap"); fig_heat.update_layout(height=250)
+
+    # Payment split bars from aggregated data
+    pay_bars = []
+    if not pay_df.empty and "payment_method" in pay_df.columns:
+        total_pay = pay_df["bookings"].sum()
+        for _, r in pay_df.iterrows():
+            pct = r["bookings"]/total_pay*100 if total_pay > 0 else 0
+            pay_bars.append(html.Div(style={"marginBottom":"10px"}, children=[
+                html.Div(style={"display":"flex","justifyContent":"space-between","marginBottom":"3px"}, children=[
+                    html.Span(str(r["payment_method"]), style={"color":TX,"fontSize":"11px","fontFamily":MONO}),
+                    html.Span(f"{pct:.1f}%", style={"color":C1,"fontSize":"11px","fontFamily":MONO,"fontWeight":"700"}),
+                ]),
+                html.Div(style={"backgroundColor":B,"borderRadius":"2px","height":"3px"}, children=[
+                    html.Div(style={"backgroundColor":C1,"width":f"{pct:.1f}%","height":"100%","borderRadius":"2px","opacity":"0.8"}),
+                ]),
+            ]))
+
+    loy_bars = []
+    if not loy_df.empty and "loyalty_tier" in loy_df.columns:
+        total_loy = loy_df["bookings"].sum()
+        for _, r in loy_df.iterrows():
+            pct = r["bookings"]/total_loy*100 if total_loy > 0 else 0
+            loy_bars.append(html.Div(style={"marginBottom":"10px"}, children=[
+                html.Div(style={"display":"flex","justifyContent":"space-between","marginBottom":"3px"}, children=[
+                    html.Span(str(r["loyalty_tier"]), style={"color":TX,"fontSize":"11px","fontFamily":MONO}),
+                    html.Span(f"{pct:.1f}%", style={"color":C5,"fontSize":"11px","fontFamily":MONO,"fontWeight":"700"}),
+                ]),
+                html.Div(style={"backgroundColor":B,"borderRadius":"2px","height":"3px"}, children=[
+                    html.Div(style={"backgroundColor":C5,"width":f"{pct:.1f}%","height":"100%","borderRadius":"2px","opacity":"0.8"}),
+                ]),
+            ]))
 
     return loading(html.Div([
         html.Div(style={"display":"flex","justifyContent":"space-between",
@@ -532,10 +685,43 @@ def render_overview(bk, sla, val, alerts, loy_f, pay_f, trip_f, seg_f, clr):
             html.Div(style={"display":"flex","gap":"8px","flexWrap":"wrap"}, children=[
                 pill("● healthy" if p_ok else "● issues", C2 if p_ok else C3),
                 pill(f"dq: {dq_score:.1f}%", C2 if dq_score>=90 else (C5 if dq_score>=70 else C3)),
+                pill(f"health: {health_score}/100", health_color),
                 pill(f"🚨 {failures} failure{'s' if failures!=1 else ''}", C3) if failures > 0 else None,
                 pill(f"⚠️ {warnings} warning{'s' if warnings!=1 else ''}", C5) if warnings > 0 and failures == 0 else None,
             ]),
         ]),
+
+        # Health Score gauge — UNIQUE FEATURE
+        card(accent=health_color, mb="14px", children=[
+            html.Div(style={"display":"flex","alignItems":"center","gap":"24px"}, children=[
+                html.Div(style={"flex":"1"}, children=[
+                    html.Div("pipeline health score", style={"color":SUB,"fontSize":"9px","fontFamily":MONO,
+                             "textTransform":"uppercase","letterSpacing":"1.5px","marginBottom":"6px"}),
+                    html.Div(f"{health_score}/100", style={"color":health_color,"fontSize":"48px",
+                             "fontWeight":"700","fontFamily":MONO,"lineHeight":"1"}),
+                    html.Div(style={"backgroundColor":B,"borderRadius":"4px","height":"6px","marginTop":"10px","width":"100%"}, children=[
+                        html.Div(style={"backgroundColor":health_color,"width":f"{health_score}%",
+                                        "height":"100%","borderRadius":"4px",
+                                        "transition":"width 0.5s ease"}),
+                    ]),
+                ]),
+                html.Div(style={"display":"flex","gap":"20px"}, children=[
+                    html.Div(style={"textAlign":"center"}, children=[
+                        html.Div(f"{dq_score:.0f}%", style={"color":C4,"fontSize":"20px","fontWeight":"700","fontFamily":MONO}),
+                        html.Div("data quality", style={"color":MUT,"fontSize":"9px","fontFamily":MONO}),
+                    ]),
+                    html.Div(style={"textAlign":"center"}, children=[
+                        html.Div(str(failures), style={"color":C3 if failures>0 else C2,"fontSize":"20px","fontWeight":"700","fontFamily":MONO}),
+                        html.Div("failures", style={"color":MUT,"fontSize":"9px","fontFamily":MONO}),
+                    ]),
+                    html.Div(style={"textAlign":"center"}, children=[
+                        html.Div(str(warnings), style={"color":C5 if warnings>0 else C2,"fontSize":"20px","fontWeight":"700","fontFamily":MONO}),
+                        html.Div("warnings", style={"color":MUT,"fontSize":"9px","fontFamily":MONO}),
+                    ]),
+                ]),
+            ]),
+        ]),
+
         html.Div(style={"display":"flex","gap":"10px","marginBottom":"14px","flexWrap":"wrap"}, children=[
             kpi("total bookings",   f"{total_b:,}",        C1, "📋"),
             kpi("customers",        f"{total_c:,}",        C2, "👤"),
@@ -553,9 +739,9 @@ def render_overview(bk, sla, val, alerts, loy_f, pay_f, trip_f, seg_f, clr):
         html.Div(style={"display":"grid","gridTemplateColumns":"1.5fr 1fr 1fr","gap":"12px"}, children=[
             card([dcc.Graph(figure=fig_heat, config={"displayModeBar":False})], accent=C4, mb="0"),
             card([html.Div("payment_method", style={"color":C6,"fontSize":"9px","marginBottom":"12px","textTransform":"uppercase","letterSpacing":"1px"}),
-                  *split_bars(df,"payment_method",C1)], accent=C1, mb="0"),
-            card([html.Div("loyalty_tier",   style={"color":C6,"fontSize":"9px","marginBottom":"12px","textTransform":"uppercase","letterSpacing":"1px"}),
-                  *split_bars(df,"loyalty_tier",C5)], accent=C5, mb="0"),
+                  *pay_bars] if pay_bars else [html.Div("no payment data",style={"color":MUT})], accent=C1, mb="0"),
+            card([html.Div("loyalty_tier", style={"color":C6,"fontSize":"9px","marginBottom":"12px","textTransform":"uppercase","letterSpacing":"1px"}),
+                  *loy_bars] if loy_bars else [html.Div("no loyalty data",style={"color":MUT})], accent=C5, mb="0"),
         ]),
     ]))
 
@@ -571,9 +757,12 @@ def render_overview(bk, sla, val, alerts, loy_f, pay_f, trip_f, seg_f, clr):
      Input("clear-filters","n_clicks")],
 )
 def render_analytics(bk, loy_f, pay_f, trip_f, seg_f, clr):
-    if not bk:
+    # Lazy load full analytics data
+    df_raw = get_tab_data("analytics")
+    if df_raw.empty:
         return html.Div("[ loading data... ]", style={"color":MUT,"fontFamily":MONO,"padding":"60px","textAlign":"center"})
-    df_raw = safe_df(bk); df = _apply_filters(df_raw, loy_f, pay_f, trip_f, seg_f); fbadge = _filter_badge(df, df_raw)
+    df = _apply_filters(df_raw, loy_f, pay_f, trip_f, seg_f)
+    fbadge = _filter_badge(df, df_raw)
     if df.empty:
         return card([html.Div("[ no data ]", style={"color":MUT,"padding":"60px","textAlign":"center"})])
 
@@ -675,10 +864,12 @@ def render_analytics(bk, loy_f, pay_f, trip_f, seg_f, clr):
      Input("clear-filters","n_clicks")],
 )
 def render_routes(bk, loy_f, pay_f, trip_f, seg_f, clr):
-    if not bk:
+    df_raw = get_tab_data("routes")
+    if df_raw.empty or "route" not in df_raw.columns:
         return html.Div("[ loading data... ]", style={"color":MUT,"fontFamily":MONO,"padding":"60px","textAlign":"center"})
-    df_raw = safe_df(bk); df = _apply_filters(df_raw, loy_f, pay_f, trip_f, seg_f); fbadge = _filter_badge(df, df_raw)
-    if df.empty or "route" not in df.columns:
+    df = _apply_filters(df_raw, loy_f, pay_f, trip_f, seg_f)
+    fbadge = _filter_badge(df, df_raw)
+    if df.empty:
         return card([html.Div("[ route data not available — check staging table ]",
                               style={"color":MUT,"padding":"60px","textAlign":"center"})])
 
@@ -794,9 +985,11 @@ def render_routes(bk, loy_f, pay_f, trip_f, seg_f, clr):
      Input("clear-filters","n_clicks")],
 )
 def render_observability(bk, loy_f, pay_f, trip_f, seg_f, clr):
-    if not bk:
+    df_raw = get_tab_data("observability")
+    if df_raw.empty:
         return html.Div("[ loading data... ]", style={"color":MUT,"fontFamily":MONO,"padding":"60px","textAlign":"center"})
-    df_raw = safe_df(bk); df = _apply_filters(df_raw, loy_f, pay_f, trip_f, seg_f); fbadge = _filter_badge(df, df_raw)
+    df = _apply_filters(df_raw, loy_f, pay_f, trip_f, seg_f)
+    fbadge = _filter_badge(df, df_raw)
     if df.empty:
         return card([html.Div("[ no data ]", style={"color":MUT,"padding":"60px","textAlign":"center"})])
 
@@ -1259,6 +1452,22 @@ def render_ai(forecast_data, fraud_data, churn_data, bk):
         "revenue by car segment",
     ]
 
+    # AI Auto-Insights — UNIQUE FEATURE
+    # Claude automatically generates 3 insights on page load
+    auto_insights_section = card(accent=C4, mb="12px", children=[
+        html.Div(style={"display":"flex","justifyContent":"space-between","alignItems":"center","marginBottom":"14px"}, children=[
+            html.Span("🤖 ai auto-insights", style={"color":C4,"fontFamily":MONO,"fontWeight":"700","fontSize":"13px"}),
+            html.Div(style={"display":"flex","gap":"6px"}, children=[
+                pill("auto-generated", C4),
+                pill("mysql · ge · ml", C6),
+            ]),
+        ]),
+        html.Div(id="auto-insights-output", children=[
+            html.Div("[ generating insights... ]",
+                     style={"color":MUT,"fontSize":"11px","fontFamily":MONO,"textAlign":"center","padding":"20px"}),
+        ]),
+    ])
+
     ai_section = card(accent=C7, mb="0", children=[
         html.Div(style={"display":"flex","justifyContent":"space-between","alignItems":"center","marginBottom":"16px"}, children=[
             html.Span("ai data assistant", style={"color":C7,"fontFamily":MONO,"fontWeight":"700","fontSize":"13px"}),
@@ -1367,6 +1576,9 @@ def render_ai(forecast_data, fraud_data, churn_data, bk):
                 fraud_table_content,
             ]),
         ]),
+
+        # AI Auto-Insights
+        html.Div(style={"marginTop":"12px"}, children=[auto_insights_section]),
 
         # AI Chat
         html.Div(style={"marginTop":"12px"}, children=[ai_section]),
@@ -1538,10 +1750,17 @@ def _render_chat(history):
     [Input("store-booking","data"), Input("store-failed","data")],
 )
 def render_debug(bk, fail):
-    if not bk:
-        return html.Div("[ loading data... ]", style={"color":MUT,"fontFamily":MONO,"padding":"60px","textAlign":"center"})
-    df      = safe_df(bk)
+    # Debug tab fetches full schema info
+    try:
+        engine = get_pg_engine()
+        df = pd.read_sql("SELECT * FROM customer_booking_staging LIMIT 1000", engine)
+        engine.dispose()
+    except Exception as e:
+        df = pd.DataFrame()
+        print(f"[DEBUG ERROR] {e}")
     fail_df = safe_df(fail)
+    if df.empty:
+        return html.Div("[ loading data... ]", style={"color":MUT,"fontFamily":MONO,"padding":"60px","textAlign":"center"})
 
     schema_items = []
     if not df.empty:
@@ -1629,6 +1848,172 @@ def _filter_badge(df, df_raw):
     active = len(df) != len(df_raw)
     return html.Span(f"[ {len(df):,} / {len(df_raw):,} records ]",
                      style={"color":C5 if active else MUT,"fontSize":"10px","fontFamily":MONO})
+
+
+# ================================================================
+# CB 13 — AI AUTO-INSIGHTS
+# UNIQUE: Claude automatically generates insights on page load
+# Uses: ML scores + MySQL GE data + pipeline stats
+# ================================================================
+@app.callback(
+    Output("auto-insights-output", "children"),
+    [Input("store-forecast", "data"),
+     Input("store-fraud", "data"),
+     Input("store-churn", "data"),
+     Input("store-validation", "data"),
+     Input("store-failed", "data"),
+     Input("store-sla", "data")],
+    prevent_initial_call=False,
+)
+def generate_auto_insights(forecast_data, fraud_data, churn_data, val_data, failed_data, sla_data):
+    ANTHROPIC_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+
+    forecast_df = safe_df(forecast_data)
+    fraud_df    = safe_df(fraud_data)
+    churn_df    = safe_df(churn_data)
+    val_df      = safe_df(val_data)
+    failed_df   = safe_df(failed_data)
+    sla_df      = safe_df(sla_data)
+
+    # Build context for Claude
+    insights_context = {}
+
+    # ML metrics
+    if not forecast_df.empty and "predicted_bookings" in forecast_df.columns:
+        insights_context["next_7d_avg_bookings"] = round(float(forecast_df["predicted_bookings"].head(7).mean()), 1)
+        insights_context["peak_forecast_day"]    = str(forecast_df.loc[forecast_df["predicted_bookings"].idxmax(), "forecast_date"])
+        insights_context["peak_forecast_value"]  = round(float(forecast_df["predicted_bookings"].max()), 0)
+
+    if not fraud_df.empty and "risk_label" in fraud_df.columns:
+        insights_context["fraud_critical_count"] = int((fraud_df["risk_label"] == "CRITICAL").sum())
+        insights_context["fraud_high_count"]     = int((fraud_df["risk_label"] == "HIGH").sum())
+        insights_context["total_fraud_scored"]   = len(fraud_df)
+        if "route" in fraud_df.columns:
+            top_fraud_route = fraud_df[fraud_df["risk_label"] == "CRITICAL"]["route"].mode()
+            insights_context["top_fraud_route"] = str(top_fraud_route.iloc[0]) if not top_fraud_route.empty else "N/A"
+
+    if not churn_df.empty and "churn_risk" in churn_df.columns:
+        high_risk = churn_df[churn_df["churn_risk"].isin(["HIGH", "CRITICAL"])]
+        insights_context["churn_high_risk_count"] = len(high_risk)
+        insights_context["churn_model_auc"]       = round(float(churn_df["model_auc"].iloc[0]), 3) if "model_auc" in churn_df.columns else "N/A"
+        if "loyalty_tier" in high_risk.columns and not high_risk.empty:
+            insights_context["highest_churn_tier"] = str(high_risk["loyalty_tier"].mode().iloc[0])
+
+    # GE validation data — MySQL
+    if not val_df.empty and "success_rate" in val_df.columns:
+        insights_context["dq_score"]        = round(float(val_df["success_rate"].mean()), 1)
+        insights_context["total_rules"]     = int(val_df["total_expectations"].sum()) if "total_expectations" in val_df.columns else 0
+        insights_context["failed_rules"]    = int(val_df["failed_expectations"].sum()) if "failed_expectations" in val_df.columns else 0
+
+    # GE failed records — UNIQUE: specific column failures
+    if not failed_df.empty:
+        if "column_name" in failed_df.columns:
+            top_failed_col = failed_df["column_name"].value_counts().head(3).to_dict()
+            insights_context["top_failed_columns"] = top_failed_col
+        insights_context["total_failed_records"] = len(failed_df)
+
+    # Pipeline health
+    if not sla_df.empty and "status" in sla_df.columns:
+        insights_context["pipeline_success_rate"] = round(
+            len(sla_df[sla_df["status"] == "SUCCESS"]) / len(sla_df) * 100, 1)
+        insights_context["total_pipeline_runs"] = int(sla_df["run_id"].nunique()) if "run_id" in sla_df.columns else 0
+
+    # No API key — show summary cards
+    if not ANTHROPIC_KEY:
+        items = []
+        if insights_context.get("churn_high_risk_count"):
+            items.append(("📉 Churn Risk",
+                f"{insights_context['churn_high_risk_count']} customers at high/critical churn risk. "
+                f"Model AUC: {insights_context.get('churn_model_auc', 'N/A')}. "
+                f"Set ANTHROPIC_API_KEY for AI analysis.", C5))
+        if insights_context.get("fraud_critical_count"):
+            items.append(("🚨 Fraud Alert",
+                f"{insights_context['fraud_critical_count']} CRITICAL + "
+                f"{insights_context.get('fraud_high_count', 0)} HIGH risk bookings detected. "
+                f"Top route: {insights_context.get('top_fraud_route', 'N/A')}.", C3))
+        if insights_context.get("dq_score"):
+            items.append(("🛡️ Data Quality",
+                f"DQ Score: {insights_context['dq_score']}%. "
+                f"{insights_context.get('failed_rules', 0)} rules violated. "
+                f"Top failed: {list(insights_context.get('top_failed_columns', {}).keys())[:2]}.", C4))
+        if not items:
+            return html.Div("[ run pipeline first to generate insights ]",
+                           style={"color":MUT,"fontSize":"11px","fontFamily":MONO,"textAlign":"center","padding":"20px"})
+        return html.Div([
+            html.Div(style={"display":"grid","gridTemplateColumns":"1fr 1fr 1fr","gap":"12px"}, children=[
+                html.Div(style={"backgroundColor":BG,"borderRadius":"6px","border":f"1px solid {B}",
+                                "borderTop":f"2px solid {c}","padding":"14px"}, children=[
+                    html.Div(title, style={"color":c,"fontSize":"11px","fontFamily":MONO,
+                                           "fontWeight":"700","marginBottom":"8px"}),
+                    html.Div(msg, style={"color":TX,"fontSize":"10px","fontFamily":MONO,"lineHeight":"1.6"}),
+                ]) for title, msg, c in items
+            ]),
+        ])
+
+    # Claude generates insights
+    try:
+        from anthropic import Anthropic
+        client = Anthropic(api_key=ANTHROPIC_KEY)
+
+        msg = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=600,
+            messages=[{"role": "user", "content": f"""
+You are an AI data analyst for a car booking pipeline.
+Analyze this data and generate exactly 3 actionable business insights.
+
+Pipeline & ML Metrics:
+{json.dumps(insights_context, indent=2, default=str)}
+
+Rules:
+1. Each insight must have: title, specific numbers, business impact, recommended action
+2. Focus on: churn risk, fraud patterns, data quality issues
+3. Be specific — use exact numbers from the data
+4. Format as JSON array:
+[
+  {{"title": "...", "insight": "...", "action": "...", "severity": "high/medium/low"}},
+  {{"title": "...", "insight": "...", "action": "...", "severity": "high/medium/low"}},
+  {{"title": "...", "insight": "...", "action": "...", "severity": "high/medium/low"}}
+]
+Return ONLY the JSON array, no other text.
+"""}])
+
+        raw = msg.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        insights_list = json.loads(raw.strip())
+
+        sev_colors = {"high": C3, "medium": C5, "low": C2}
+        sev_icons  = {"high": "🚨", "medium": "⚠️", "low": "✅"}
+
+        return html.Div([
+            html.Div(style={"display":"grid","gridTemplateColumns":"1fr 1fr 1fr","gap":"12px"}, children=[
+                html.Div(style={
+                    "backgroundColor":BG,"borderRadius":"6px",
+                    "border":f"1px solid {B}",
+                    "borderTop":f"2px solid {sev_colors.get(ins.get('severity','medium'), C5)}",
+                    "padding":"14px"}, children=[
+                    html.Div(style={"display":"flex","alignItems":"center","gap":"6px","marginBottom":"8px"}, children=[
+                        html.Span(sev_icons.get(ins.get("severity","medium"), "⚠️"), style={"fontSize":"14px"}),
+                        html.Span(ins.get("title","Insight"), style={
+                            "color":sev_colors.get(ins.get("severity","medium"), C5),
+                            "fontSize":"11px","fontFamily":MONO,"fontWeight":"700"}),
+                    ]),
+                    html.Div(ins.get("insight",""), style={"color":TX,"fontSize":"10px","fontFamily":MONO,
+                                                            "lineHeight":"1.6","marginBottom":"8px"}),
+                    html.Div(style={"borderTop":f"1px solid {B}","paddingTop":"8px","marginTop":"4px"}, children=[
+                        html.Span("→ ", style={"color":C1,"fontSize":"9px","fontFamily":MONO}),
+                        html.Span(ins.get("action",""), style={"color":C6,"fontSize":"9px","fontFamily":MONO}),
+                    ]),
+                ]) for ins in insights_list[:3]
+            ]),
+        ])
+
+    except Exception as e:
+        return html.Div(f"[ insights error: {str(e)[:80]} ]",
+                       style={"color":C3,"fontSize":"10px","fontFamily":MONO,"padding":"10px"})
 
 
 if __name__ == "__main__":

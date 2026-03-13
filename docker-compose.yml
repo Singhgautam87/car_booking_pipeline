@@ -33,8 +33,8 @@ services:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_HEAP_OPTS: "-Xmx128M -Xms128M"
     healthcheck:
-      # ✅ FIX 1: nc available nahi hota — zkServer.sh use karo
-      test: ["CMD-SHELL", "zkServer.sh status || exit 1"]
+      # ✅ FIX: zkServer.sh Confluent image mein fail hota hai — ruok/imok use karo
+      test: ["CMD-SHELL", "echo ruok | nc -w 2 localhost 2181 | grep imok"]
       interval: 10s
       timeout: 10s
       retries: 10

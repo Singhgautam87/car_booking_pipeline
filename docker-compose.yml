@@ -9,7 +9,6 @@ services:
     dns:
       - 8.8.8.8
       - 8.8.4.4
-
     ports:
       - "8080:8080"
       - "50000:50000"
@@ -17,9 +16,9 @@ services:
       - jenkins_home:/var/jenkins_home
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
-      - JAVA_OPTS=-Xmx1g -Xms512m -XX:+UseG1GC
-    mem_limit: 1.5g
-    memswap_limit: 1.5g
+      - JAVA_OPTS=-Xmx512m -Xms256m -XX:+UseG1GC
+    mem_limit: 1g
+    memswap_limit: 1g
     networks:
       - car-booking-network
 
@@ -28,10 +27,11 @@ services:
     image: confluentinc/cp-zookeeper:7.5.0
     container_name: zookeeper
     restart: unless-stopped
-    mem_limit: 512m
+    mem_limit: 256m
+    memswap_limit: 256m
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
-      ZOOKEEPER_HEAP_OPTS: "-Xmx256M -Xms256M"
+      ZOOKEEPER_HEAP_OPTS: "-Xmx128M -Xms128M"
     healthcheck:
       test: ["CMD-SHELL", "echo ruok | nc localhost 2181 | grep imok"]
       interval: 10s
@@ -46,10 +46,11 @@ services:
     image: confluentinc/cp-kafka:7.5.0
     container_name: kafka
     restart: unless-stopped
-    mem_limit: 1g
+    mem_limit: 512m
+    memswap_limit: 512m
     depends_on:
       zookeeper:
-        condition : service_started   
+        condition: service_started
     ports:
       - "9092:9092"
     environment:
@@ -60,7 +61,7 @@ services:
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT_INTERNAL
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_LOG_RETENTION_HOURS: 24
-      KAFKA_HEAP_OPTS: "-Xmx512M -Xms256M"
+      KAFKA_HEAP_OPTS: "-Xmx256M -Xms128M"
     healthcheck:
       test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092 || exit 1"]
       interval: 10s
@@ -75,7 +76,8 @@ services:
     image: confluentinc/cp-schema-registry:7.5.0
     container_name: schema-registry
     restart: unless-stopped
-    mem_limit: 512m
+    mem_limit: 256m
+    memswap_limit: 256m
     depends_on:
       kafka:
         condition: service_healthy
@@ -86,7 +88,7 @@ services:
       SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: kafka:29092
       SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
       SCHEMA_REGISTRY_KAFKASTORE_TOPIC_REPLICATION_FACTOR: 1
-      SCHEMA_REGISTRY_HEAP_OPTS: "-Xmx256M -Xms256M"
+      SCHEMA_REGISTRY_HEAP_OPTS: "-Xmx128M -Xms128M"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8081/subjects"]
       interval: 15s
@@ -101,7 +103,8 @@ services:
     image: provectuslabs/kafka-ui:latest
     container_name: kafka-ui
     restart: unless-stopped
-    mem_limit: 512m
+    mem_limit: 256m
+    memswap_limit: 256m
     ports:
       - "8081:8080"
     environment:
@@ -116,12 +119,14 @@ services:
       - car-booking-network
 
   # ── SPARK ──────────────────────────────────────────────────────
+  # mem_limit 2g — sequential transforms mein ek waqt 1 job
+  # 512m driver + 256m executor + overhead = ~1g comfortable fit
   spark:
     image: apache/spark:3.4.2
     container_name: spark-master
     restart: unless-stopped
-    mem_limit: 2.5g
-    memswap_limit: 2.5g
+    mem_limit: 2g
+    memswap_limit: 2g
     ports:
       - "8082:8080"
       - "7077:7077"
@@ -131,8 +136,8 @@ services:
         condition: service_healthy
     volumes:
       - ./reports:/opt/reports
-      - ./config:/opt/config         # config_loader.py reads /opt/config/config.json
-      - ./spark/lib:/opt/spark-apps/lib  # config_loader.py available inside container
+      - ./config:/opt/config
+      - ./spark/lib:/opt/spark-apps/lib
     command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080 || exit 1"]
@@ -148,7 +153,8 @@ services:
     image: minio/minio
     container_name: minio
     restart: unless-stopped
-    mem_limit: 1g
+    mem_limit: 512m
+    memswap_limit: 512m
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -157,7 +163,7 @@ services:
       MINIO_ROOT_PASSWORD: admin123
     command: server /data --console-address ":9001"
     volumes:
-      - minio_data:/data              # ✅ data persists across restarts
+      - minio_data:/data
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 15s
@@ -172,7 +178,8 @@ services:
     image: postgres:15
     container_name: postgres
     restart: unless-stopped
-    mem_limit: 1g
+    mem_limit: 512m
+    memswap_limit: 512m
     environment:
       POSTGRES_DB: booking
       POSTGRES_USER: admin
@@ -197,7 +204,8 @@ services:
     image: mysql:8
     container_name: mysql
     restart: unless-stopped
-    mem_limit: 1g
+    mem_limit: 512m
+    memswap_limit: 512m
     environment:
       MYSQL_DATABASE: booking
       MYSQL_USER: admin
@@ -221,12 +229,13 @@ services:
     build: ./great_expectations
     container_name: great_expectations
     restart: "no"
-    mem_limit: 1g
+    mem_limit: 512m
+    memswap_limit: 512m
     volumes:
       - ./great_expectations:/ge
       - ./reports:/opt/reports
-      - ./spark/lib:/opt/spark/lib      # config_loader.py
-      - ./config:/opt/config         # config.json
+      - ./spark/lib:/opt/spark/lib
+      - ./config:/opt/config
     depends_on:
       postgres:
         condition: service_healthy
@@ -242,11 +251,13 @@ services:
       - car-booking-network
 
   # ── MLFLOW ─────────────────────────────────────────────────────
+  # Spark khatam hone ke baad chalta hai — memory free hoti hai
   mlflow:
     image: ghcr.io/mlflow/mlflow:latest
     container_name: mlflow
     restart: unless-stopped
-    mem_limit: 512m
+    mem_limit: 256m
+    memswap_limit: 256m
     ports:
       - "5000:5000"
     command: >
@@ -267,23 +278,26 @@ services:
       - car-booking-network
 
   # ── DASHBOARD ──────────────────────────────────────────────────
+  # Claude API = network call, no local compute
+  # 512m dashboard mein comfortably fit ✅
   dashboard:
     build:
       context: ./realtime_dashboard
       dockerfile: Dockerfile
     container_name: dashboard
     restart: "no"
-    mem_limit: 1g
+    mem_limit: 512m
+    memswap_limit: 512m
     ports:
       - "8050:8050"
     environment:
       - MYSQL_HOST=mysql
       - POSTGRES_HOST=postgres
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}   # Claude AI chat — optional
-      - LANGSMITH_API_KEY=${LANGSMITH_API_KEY:-}   # LangSmith monitoring — optional
-      - MLFLOW_TRACKING_URI=http://mlflow:5000     # MLflow model tracking
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - LANGSMITH_API_KEY=${LANGSMITH_API_KEY:-}
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
     volumes:
-      - ./config:/opt/config                    # config_loader.py access
+      - ./config:/opt/config
     depends_on:
       postgres:
         condition: service_healthy
@@ -305,6 +319,6 @@ networks:
 volumes:
   postgres_data:
   mysql_data:
-  minio_data:     # ✅ minio data persists (Delta Lake files safe)
-  mlflow_data:    # ✅ MLflow experiments + model artifacts
+  minio_data:
+  mlflow_data:
   jenkins_home:

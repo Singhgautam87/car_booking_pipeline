@@ -3,14 +3,12 @@
     "name": "car-booking-pipeline",
     "alert_email": "your-email@gmail.com"
   },
-
   "minio": {
     "endpoint": "http://minio:9000",
     "access_key": "admin",
     "secret_key": "admin123",
     "path_style": true
   },
-
   "kafka": {
     "bootstrap_servers": "kafka:9092",
     "topic": "car-bookings",
@@ -21,7 +19,6 @@
     "session_timeout_ms": "30000",
     "schema_registry_url": "http://schema-registry:8081"
   },
-
   "postgresql": {
     "host": "postgres",
     "port": 5432,
@@ -31,7 +28,6 @@
     "driver": "org.postgresql.Driver",
     "jdbc_url": "jdbc:postgresql://postgres:5432/booking"
   },
-
   "mysql": {
     "host": "mysql",
     "port": 3306,
@@ -41,32 +37,30 @@
     "driver": "com.mysql.cj.jdbc.Driver",
     "jdbc_url": "jdbc:mysql://mysql:3306/booking"
   },
-
   "spark": {
     "driver_memory": "512m",
-    "executor_memory": "512m",
-    "max_result_size": "256m",
+    "executor_memory": "256m",
+    "max_result_size": "128m",
     "packages": "org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.2,org.postgresql:postgresql:42.5.0,mysql:mysql-connector-java:8.0.33,org.apache.hadoop:hadoop-aws:3.3.4,io.delta:delta-core_2.12:2.4.0",
     "delta_extension": "io.delta.sql.DeltaSparkSessionExtension",
     "delta_catalog": "org.apache.spark.sql.delta.catalog.DeltaCatalog",
-    "postgresql_jar": "/opt/spark/jars/postgresql-42.5.0.jar"
+    "postgresql_jar": "/opt/spark/jars/postgresql-42.5.0.jar",
+    "shuffle_partitions": "4",
+    "memory_fraction": "0.6"
   },
-
   "delta_paths": {
-    "raw":                  "s3a://delta/raw/booking",
-    "raw_cars":             "s3a://delta/raw/cars",
-    "raw_payments":         "s3a://delta/raw/payments",
+    "raw": "s3a://delta/raw/booking",
+    "raw_cars": "s3a://delta/raw/cars",
+    "raw_payments": "s3a://delta/raw/payments",
     "customer_transformed": "s3a://delta/transformed/customer",
-    "booking_transformed":  "s3a://delta/transformed/booking",
-    "cars_transformed":     "s3a://delta/transformed/cars",
+    "booking_transformed": "s3a://delta/transformed/booking",
+    "cars_transformed": "s3a://delta/transformed/cars",
     "payments_transformed": "s3a://delta/transformed/payments",
-    "merged":               "s3a://delta/curated/customer_booking"
+    "merged": "s3a://delta/curated/customer_booking"
   },
-
   "tables": {
     "staging": "customer_booking_staging"
   },
-
   "pipeline": {
     "dq_threshold": 80,
     "producer_sleep_seconds": 60,

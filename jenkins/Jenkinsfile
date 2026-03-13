@@ -20,7 +20,8 @@ pipeline {
         SPARK_PACKAGES  = """${sh(script: "python3 -c \"import json; c=json.load(open('config/config.json')); print(c['spark']['packages'])\"", returnStdout: true).trim()}"""
         DELTA_CONF      = """${sh(script: "python3 -c \"import json; c=json.load(open('config/config.json')); s=c['spark']; print('--conf spark.sql.extensions='+s['delta_extension']+' --conf spark.sql.catalog.spark_catalog='+s['delta_catalog'])\"", returnStdout: true).trim()}"""
         S3_CONF         = """${sh(script: "python3 -c \"import json; c=json.load(open('config/config.json')); m=c['minio']; print('--conf spark.hadoop.fs.s3a.endpoint='+m['endpoint']+' --conf spark.hadoop.fs.s3a.access.key='+m['access_key']+' --conf spark.hadoop.fs.s3a.secret.key='+m['secret_key']+' --conf spark.hadoop.fs.s3a.path.style.access=true --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem')\"", returnStdout: true).trim()}"""
-        SPARK_MEMORY    = """${sh(script: "python3 -c \"import json; c=json.load(open('config/config.json')); s=c['spark']; print('--driver-memory '+s['driver_memory']+' --executor-memory '+s['executor_memory']+' --conf spark.driver.maxResultSize='+s['max_result_size'])\"", returnStdout: true).trim()}"""
+        // ✅ config.json se load — driver_memory=1g, executor_memory=1g, shuffle_partitions=4
+        SPARK_MEMORY    = """${sh(script: "python3 -c \"import json; c=json.load(open('config/config.json')); s=c['spark']; print('--driver-memory '+s['driver_memory']+' --executor-memory '+s['executor_memory']+' --conf spark.driver.maxResultSize='+s['max_result_size']+' --conf spark.sql.shuffle.partitions='+s['shuffle_partitions']+' --conf spark.memory.fraction='+s['memory_fraction'])\"", returnStdout: true).trim()}"""
 
         // ✅ Single RUN_ID shared across ALL stages — consistent tracking in MySQL
         PIPELINE_RUN_ID = """${sh(script: "date +%Y%m%d_%H%M%S", returnStdout: true).trim()}"""
@@ -261,85 +262,141 @@ pipeline {
             }
         }
 
-        // ── TRANSFORM (Silver Layer) — PARALLEL ─────────────────
-        // ✅ 4 transforms run in parallel — cores.max=1 per job prevents OOM
-        stage('Transform Data') {
-            parallel {
-                stage('Transform · Customer') {
-                    steps {
-                        timeout(time: 30, unit: 'MINUTES') {
-                            sh '''
-                                $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
-                                    --conf spark.cores.max=1 \
-                                    --conf spark.sql.shuffle.partitions=2 \
-                                    /opt/spark-apps/jobs/transform_customer.py
-                                echo "✅ Customer transform done"
-                            '''
-                        }
-                    }
-                }
-                stage('Transform · Booking') {
-                    steps {
-                        timeout(time: 30, unit: 'MINUTES') {
-                            sh '''
-                                $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
-                                    --conf spark.cores.max=1 \
-                                    --conf spark.sql.shuffle.partitions=2 \
-                                    /opt/spark-apps/jobs/transform_booking.py
-                                echo "✅ Booking transform done"
-                            '''
-                        }
-                    }
-                }
-                stage('Transform · Cars') {
-                    steps {
-                        timeout(time: 30, unit: 'MINUTES') {
-                            sh '''
-                                $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
-                                    --conf spark.cores.max=1 \
-                                    --conf spark.sql.shuffle.partitions=2 \
-                                    /opt/spark-apps/jobs/transform_cars.py
-                                echo "✅ Cars transform done"
-                            '''
-                        }
-                    }
-                }
-                stage('Transform · Payments') {
-                    steps {
-                        timeout(time: 30, unit: 'MINUTES') {
-                            sh '''
-                                $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
-                                    --conf spark.cores.max=1 \
-                                    --conf spark.sql.shuffle.partitions=2 \
-                                    /opt/spark-apps/jobs/transform_payments.py
-                                echo "✅ Payments transform done"
-                            '''
-                        }
-                    }
-                }
-            }
-            // ✅ Log single entry after all 4 parallel transforms complete
-            post {
-                success {
+        // ── TRANSFORM (Silver Layer) — SEQUENTIAL ────────────────
+        // 8GB machine ke liye sequential — ek waqt 1 Spark job
+        // Memory: 512m driver + 256m executor = ~768m per job (2g limit mein safe)
+        // Production (16GB+) pe parallel restore karna ho toh:
+        //   parallel { stage('Customer'){...} stage('Booking'){...} ... }
+        stage('Transform · Customer') {
+            steps {
+                timeout(time: 15, unit: 'MINUTES') {
                     sh '''
+                        STAGE_START=$(date +%s)
+                        $SPARK_SUBMIT $SPARK_MEMORY \
+                            --conf spark.sql.shuffle.partitions=4 \
+                            --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
+                            /opt/spark-apps/jobs/transform_customer.py
+                        STAGE_END=$(date +%s)
                         docker exec mysql mysql -u admin -padmin booking -e "
                             INSERT INTO pipeline_run_stats
                                 (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
-                            VALUES ('${PIPELINE_RUN_ID}', 'spark_transform', 0, 0, 'SUCCESS', NOW());
+                            VALUES ('${PIPELINE_RUN_ID}', 'transform_customer', 0, $((STAGE_END-STAGE_START)), 'SUCCESS', NOW());
                         " || true
-                        echo "✅ Silver layer ready!"
+                        echo "✅ Customer transform done"
                     '''
                 }
+            }
+            post {
                 failure {
                     sh '''
                         docker exec mysql mysql -u admin -padmin booking -e "
                             INSERT INTO pipeline_run_stats
                                 (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
-                            VALUES ('${PIPELINE_RUN_ID}', 'spark_transform', 0, 0, 'FAILED', NOW());
+                            VALUES ('${PIPELINE_RUN_ID}', 'transform_customer', 0, 0, 'FAILED', NOW());
+                        " || true
+                    '''
+                }
+            }
+        }
+
+        stage('Transform · Booking') {
+            steps {
+                timeout(time: 15, unit: 'MINUTES') {
+                    sh '''
+                        STAGE_START=$(date +%s)
+                        $SPARK_SUBMIT $SPARK_MEMORY \
+                            --conf spark.sql.shuffle.partitions=4 \
+                            --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
+                            /opt/spark-apps/jobs/transform_booking.py
+                        STAGE_END=$(date +%s)
+                        docker exec mysql mysql -u admin -padmin booking -e "
+                            INSERT INTO pipeline_run_stats
+                                (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
+                            VALUES ('${PIPELINE_RUN_ID}', 'transform_booking', 0, $((STAGE_END-STAGE_START)), 'SUCCESS', NOW());
+                        " || true
+                        echo "✅ Booking transform done"
+                    '''
+                }
+            }
+            post {
+                failure {
+                    sh '''
+                        docker exec mysql mysql -u admin -padmin booking -e "
+                            INSERT INTO pipeline_run_stats
+                                (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
+                            VALUES ('${PIPELINE_RUN_ID}', 'transform_booking', 0, 0, 'FAILED', NOW());
+                        " || true
+                    '''
+                }
+            }
+        }
+
+        stage('Transform · Cars') {
+            steps {
+                timeout(time: 15, unit: 'MINUTES') {
+                    sh '''
+                        STAGE_START=$(date +%s)
+                        $SPARK_SUBMIT $SPARK_MEMORY \
+                            --conf spark.sql.shuffle.partitions=4 \
+                            --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
+                            /opt/spark-apps/jobs/transform_cars.py
+                        STAGE_END=$(date +%s)
+                        docker exec mysql mysql -u admin -padmin booking -e "
+                            INSERT INTO pipeline_run_stats
+                                (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
+                            VALUES ('${PIPELINE_RUN_ID}', 'transform_cars', 0, $((STAGE_END-STAGE_START)), 'SUCCESS', NOW());
+                        " || true
+                        echo "✅ Cars transform done"
+                    '''
+                }
+            }
+            post {
+                failure {
+                    sh '''
+                        docker exec mysql mysql -u admin -padmin booking -e "
+                            INSERT INTO pipeline_run_stats
+                                (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
+                            VALUES ('${PIPELINE_RUN_ID}', 'transform_cars', 0, 0, 'FAILED', NOW());
+                        " || true
+                    '''
+                }
+            }
+        }
+
+        stage('Transform · Payments') {
+            steps {
+                timeout(time: 15, unit: 'MINUTES') {
+                    sh '''
+                        STAGE_START=$(date +%s)
+                        $SPARK_SUBMIT $SPARK_MEMORY \
+                            --conf spark.sql.shuffle.partitions=4 \
+                            --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
+                            /opt/spark-apps/jobs/transform_payments.py
+                        STAGE_END=$(date +%s)
+                        docker exec mysql mysql -u admin -padmin booking -e "
+                            INSERT INTO pipeline_run_stats
+                                (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
+                            VALUES ('${PIPELINE_RUN_ID}', 'transform_payments', 0, $((STAGE_END-STAGE_START)), 'SUCCESS', NOW());
+                            INSERT INTO pipeline_run_stats
+                                (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
+                            VALUES ('${PIPELINE_RUN_ID}', 'spark_transform', 0, 0, 'SUCCESS', NOW());
+                        " || true
+                        echo "✅ Payments transform done"
+                        echo "✅ Silver layer ready — all 4 transforms complete"
+                    '''
+                }
+            }
+            post {
+                failure {
+                    sh '''
+                        docker exec mysql mysql -u admin -padmin booking -e "
+                            INSERT INTO pipeline_run_stats
+                                (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
+                            VALUES ('${PIPELINE_RUN_ID}', 'transform_payments', 0, 0, 'FAILED', NOW());
                             INSERT INTO pipeline_alerts
                                 (pipeline_name, stage_name, execution_date, error_message, alert_type)
                             VALUES ('car_booking_pipeline', 'spark_transform', NOW(),
-                                    'One or more parallel transforms failed', 'FAILURE');
+                                    'Transform · Payments failed', 'FAILURE');
                         " || true
                     '''
                 }

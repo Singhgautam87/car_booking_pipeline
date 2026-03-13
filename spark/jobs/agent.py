@@ -1,13 +1,11 @@
 """
 AI Agents — Car Booking Pipeline v2
 =====================================
-New in v2:
-  - BookingIntelligenceOrchestrator  — Multi-Agent coordination
-  - MLflow integration               — Model experiment tracking
-  - LangSmith monitoring             — LLM observability (tokens, latency, cost)
-  - ModelEvaluationAgent             — MAPE, Precision/Recall, AUC tracking
-
-Same config_loader pattern as write_to_postgres.py
+FIXES in this version:
+  - FIX 1: Prophet date range fix — future forecast dates se match hoga
+  - FIX 2: Fraud rate threshold — 10% → 30% (realistic)
+  - FIX 3: MLflow health check — requests se pehle check karo
+  - FIX 4: pd.read_sql warnings fix — SQLAlchemy engine use karo
 
 PostgreSQL table — customer_booking_staging (36 columns):
   booking_id, customer_id, customer_name, email,
@@ -41,10 +39,13 @@ import pandas as pd
 from datetime import datetime
 from typing import Optional
 
+# ✅ FIX 4: SQLAlchemy engine import
+from sqlalchemy import create_engine
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-# ── Exact same pattern as write_to_postgres.py ─────────────────
+# ── Config loader ───────────────────────────────────────────────
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'lib'))
 from config_loader import load_config
 
@@ -53,10 +54,10 @@ postgres_cfg = config.get_postgres_config()
 mysql_cfg    = config.get_mysql_config()
 tables       = config.get_tables()
 
-ANTHROPIC_API_KEY  = os.getenv("ANTHROPIC_API_KEY", "")
-LANGSMITH_API_KEY  = os.getenv("LANGSMITH_API_KEY", "")   # optional
-MLFLOW_TRACKING_URI= os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5000")
-STAGING_TABLE      = tables.get("staging", "customer_booking_staging")
+ANTHROPIC_API_KEY   = os.getenv("ANTHROPIC_API_KEY", "")
+LANGSMITH_API_KEY   = os.getenv("LANGSMITH_API_KEY", "")
+MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5000")
+STAGING_TABLE       = tables.get("staging", "customer_booking_staging")
 
 PG_CONN_PARAMS = {
     "host":     postgres_cfg["host"],
@@ -77,23 +78,17 @@ PG_SQLALCHEMY_URL = (
     f"@{postgres_cfg['host']}:{postgres_cfg['port']}/{postgres_cfg['database']}"
 )
 
+# ✅ FIX 4: SQLAlchemy engine — pd.read_sql warnings hatega
+PG_ENGINE = create_engine(PG_SQLALCHEMY_URL)
+
 def get_pg_conn():    return psycopg2.connect(**PG_CONN_PARAMS)
 def get_mysql_conn(): return pymysql.connect(**MYSQL_CONN_PARAMS)
 
 
 # ══════════════════════════════════════════════════════════════════
-# LANGSMITH SETUP — LLM Observability
-# Token usage, latency, cost automatically tracked
+# LANGSMITH SETUP
 # ══════════════════════════════════════════════════════════════════
 def _setup_langsmith():
-    """
-    LangSmith monitor karta hai:
-    - Har Claude API call ka latency
-    - Token usage (input + output)
-    - Cost per call
-    - Error rates
-    - Dashboard: smith.langchain.com
-    """
     if not LANGSMITH_API_KEY:
         logger.info("[LangSmith] Not configured — set LANGSMITH_API_KEY for LLM monitoring")
         return False
@@ -112,24 +107,30 @@ LANGSMITH_ENABLED = _setup_langsmith()
 
 
 # ══════════════════════════════════════════════════════════════════
-# MLFLOW SETUP — Model Experiment Tracking
+# MLFLOW SETUP
+# ✅ FIX 3: Connection se pehle health check karo
 # ══════════════════════════════════════════════════════════════════
 def _get_mlflow_client():
-    """
-    MLflow track karta hai:
-    - Prophet MAPE (accuracy)
-    - XGBoost AUC, Precision, Recall
-    - Isolation Forest contamination rate
-    - Model artifacts (saved .pkl files)
-    - Experiment runs history
-    - Dashboard: http://localhost:5000
-    """
     try:
         import mlflow
+        import requests
+
+        # ✅ FIX 3: Pehle MLflow ready hai ya nahi check karo
+        try:
+            resp = requests.get(
+                f"{MLFLOW_TRACKING_URI}/api/2.0/mlflow/experiments/list",
+                timeout=5
+            )
+            if resp.status_code != 200:
+                raise Exception(f"MLflow not ready — HTTP {resp.status_code}")
+        except requests.exceptions.ConnectionError:
+            raise Exception("MLflow connection refused — service start nahi hua")
+
         mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
         mlflow.set_experiment("car-booking-ml-models")
         logger.info(f"[MLflow] ✓ Connected — {MLFLOW_TRACKING_URI}")
         return mlflow
+
     except ImportError:
         logger.info("[MLflow] Not installed — pip install mlflow")
         return None
@@ -142,10 +143,7 @@ def _get_mlflow_client():
 # 1. TEXT-TO-SQL AGENT
 # ══════════════════════════════════════════════════════════════════
 class TextToSQLAgent:
-    """
-    Natural language → SQL on customer_booking_staging (36 cols)
-    LangSmith automatically traces all Claude API calls
-    """
+    """Natural language → SQL on customer_booking_staging (36 cols)"""
 
     def __init__(self):
         if not ANTHROPIC_API_KEY:
@@ -185,26 +183,24 @@ class TextToSQLAgent:
             self._ai_enabled = False
 
     def query(self, question: str, run_id: Optional[str] = None) -> dict:
-        """LangSmith automatically traces this if configured"""
         start = time.time()
         if self._ai_enabled:
             try:
                 result  = self._agent.run(question)
                 latency = round(time.time() - start, 2)
                 logger.info(f"[TextToSQL] Claude answered in {latency}s")
-                return {"status":"success","question":question,
-                        "answer":result,"mode":"claude_api",
-                        "latency_seconds":latency,
+                return {"status": "success", "question": question,
+                        "answer": result, "mode": "claude_api",
+                        "latency_seconds": latency,
                         "orchestration_run_id": run_id,
-                        "timestamp":datetime.now().isoformat()}
+                        "timestamp": datetime.now().isoformat()}
             except Exception as e:
                 logger.warning(f"[TextToSQL] Claude API failed: {e}")
         return self._sql_fallback(question, run_id)
 
     def _sql_fallback(self, question: str, run_id: Optional[str] = None) -> dict:
-        """Direct pandas queries — uses new 36 columns"""
-        q    = question.lower()
-        conn = get_pg_conn()
+        """Direct pandas queries — ✅ FIX 4: PG_ENGINE use ho raha hai"""
+        q = question.lower()
         try:
             if "route" in q:
                 df = pd.read_sql(f"""
@@ -212,7 +208,7 @@ class TextToSQLAgent:
                            ROUND(AVG(payment_amount)::numeric,0) AS avg_payment
                     FROM {STAGING_TABLE}
                     GROUP BY route ORDER BY bookings DESC LIMIT 5
-                """, conn)
+                """, PG_ENGINE)
                 answer = f"Top routes:\n{df.to_string(index=False)}"
 
             elif "trip" in q or "trip_type" in q:
@@ -221,7 +217,7 @@ class TextToSQLAgent:
                            ROUND(AVG(payment_amount)::numeric,0) AS avg_payment
                     FROM {STAGING_TABLE}
                     GROUP BY trip_type ORDER BY bookings DESC
-                """, conn)
+                """, PG_ENGINE)
                 answer = f"Trip types:\n{df.to_string(index=False)}"
 
             elif "hour" in q or "busiest" in q or "pickup_hour" in q:
@@ -230,7 +226,7 @@ class TextToSQLAgent:
                     FROM {STAGING_TABLE}
                     GROUP BY pickup_hour, pickup_slot
                     ORDER BY bookings DESC LIMIT 5
-                """, conn)
+                """, PG_ENGINE)
                 answer = f"Busiest pickup hours:\n{df.to_string(index=False)}"
 
             elif "segment" in q or "car_segment" in q:
@@ -240,7 +236,7 @@ class TextToSQLAgent:
                     FROM {STAGING_TABLE}
                     GROUP BY car_segment, model
                     ORDER BY bookings DESC LIMIT 8
-                """, conn)
+                """, PG_ENGINE)
                 answer = f"Car segments:\n{df.to_string(index=False)}"
 
             elif "payment" in q and ("method" in q or "digital" in q):
@@ -253,7 +249,7 @@ class TextToSQLAgent:
                     FROM {STAGING_TABLE}
                     GROUP BY payment_method, amount_tier
                     ORDER BY count DESC
-                """, conn)
+                """, PG_ENGINE)
                 answer = f"Payment methods:\n{df.to_string(index=False)}"
 
             elif "loyalty" in q or "tier" in q or "high value" in q:
@@ -266,7 +262,7 @@ class TextToSQLAgent:
                     FROM {STAGING_TABLE}
                     GROUP BY loyalty_tier, points_tier
                     ORDER BY avg_payment DESC
-                """, conn)
+                """, PG_ENGINE)
                 answer = f"Loyalty breakdown:\n{df.to_string(index=False)}"
 
             elif "insurance" in q:
@@ -277,7 +273,7 @@ class TextToSQLAgent:
                     FROM {STAGING_TABLE}
                     GROUP BY insurance_coverage, insurer_type
                     ORDER BY bookings DESC
-                """, conn)
+                """, PG_ENGINE)
                 answer = f"Insurance breakdown:\n{df.to_string(index=False)}"
 
             elif "revenue" in q or "amount" in q:
@@ -288,7 +284,7 @@ class TextToSQLAgent:
                            SUM(is_split_payment::int) AS split_payments,
                            SUM(is_digital_payment::int) AS digital_payments
                     FROM {STAGING_TABLE}
-                """, conn)
+                """, PG_ENGINE)
                 answer = f"Revenue summary:\n{df.to_string(index=False)}"
 
             elif "month" in q or "trend" in q:
@@ -299,7 +295,7 @@ class TextToSQLAgent:
                     FROM {STAGING_TABLE}
                     GROUP BY booking_year, booking_month
                     ORDER BY booking_year, booking_month
-                """, conn)
+                """, PG_ENGINE)
                 answer = f"Monthly trend:\n{df.to_string(index=False)}"
 
             else:
@@ -311,34 +307,30 @@ class TextToSQLAgent:
                            ROUND(SUM(payment_amount)::numeric,0) AS total_revenue,
                            SUM(is_high_value_customer::int) AS high_value_customers
                     FROM {STAGING_TABLE}
-                """, conn)
+                """, PG_ENGINE)
                 answer = (f"Pipeline summary ({STAGING_TABLE}):\n"
                           f"{df.to_string(index=False)}\n\n"
                           f"Set ANTHROPIC_API_KEY for natural language answers.")
 
-            return {"status":"success","question":question,"answer":answer,
-                    "mode":"sql_fallback","orchestration_run_id": run_id,
-                    "timestamp":datetime.now().isoformat()}
+            return {"status": "success", "question": question, "answer": answer,
+                    "mode": "sql_fallback", "orchestration_run_id": run_id,
+                    "timestamp": datetime.now().isoformat()}
         except Exception as e:
-            return {"status":"error","question":question,
-                    "answer":f"Query failed: {e}","mode":"error",
-                    "timestamp":datetime.now().isoformat()}
-        finally:
-            conn.close()
+            return {"status": "error", "question": question,
+                    "answer": f"Query failed: {e}", "mode": "error",
+                    "timestamp": datetime.now().isoformat()}
 
 
 # ══════════════════════════════════════════════════════════════════
 # 2. PIPELINE HEALTH AGENT
 # ══════════════════════════════════════════════════════════════════
 class PipelineHealthAgent:
-    """
-    Reads MySQL monitoring tables → Claude explains health
-    """
 
     def get_pipeline_stats(self) -> pd.DataFrame:
         try:
             conn = get_mysql_conn()
-            df   = pd.read_sql("""
+            # ✅ FIX 4: MySQL ke liye direct connection — SQLAlchemy zarurat nahi
+            df = pd.read_sql("""
                 SELECT stage_name, status, duration_seconds,
                        records_processed, error_message, started_at
                 FROM pipeline_run_stats
@@ -350,7 +342,7 @@ class PipelineHealthAgent:
     def get_active_alerts(self) -> pd.DataFrame:
         try:
             conn = get_mysql_conn()
-            df   = pd.read_sql("""
+            df = pd.read_sql("""
                 SELECT alert_type, pipeline_name, stage_name,
                        error_message, created_at
                 FROM pipeline_alerts
@@ -363,7 +355,7 @@ class PipelineHealthAgent:
     def get_dq_results(self) -> pd.DataFrame:
         try:
             conn = get_mysql_conn()
-            df   = pd.read_sql("""
+            df = pd.read_sql("""
                 SELECT run_identifier, total_expectations,
                        passed_expectations, failed_expectations,
                        success_rate, validation_status, created_at
@@ -379,13 +371,13 @@ class PipelineHealthAgent:
         alerts = self.get_active_alerts()
         dq     = self.get_dq_results()
 
-        failed_stages   = len(stats[stats["status"]=="FAILED"])        if not stats.empty  and "status"      in stats.columns  else 0
-        critical_alerts = len(alerts[alerts["alert_type"]=="FAILURE"])  if not alerts.empty and "alert_type"  in alerts.columns else 0
-        dq_score        = float(dq["success_rate"].mean())              if not dq.empty     and "success_rate" in dq.columns    else 100.0
+        failed_stages   = len(stats[stats["status"] == "FAILED"])         if not stats.empty  and "status"       in stats.columns  else 0
+        critical_alerts = len(alerts[alerts["alert_type"] == "FAILURE"])   if not alerts.empty and "alert_type"   in alerts.columns else 0
+        dq_score        = float(dq["success_rate"].mean())                 if not dq.empty     and "success_rate" in dq.columns     else 100.0
 
-        if   failed_stages==0 and critical_alerts==0 and dq_score>=90: health, score = "HEALTHY",  100
-        elif failed_stages<=1 or  critical_alerts<=2 or  dq_score>=70: health, score = "WARNING",  65
-        else:                                                            health, score = "CRITICAL", 30
+        if   failed_stages == 0 and critical_alerts == 0 and dq_score >= 90: health, score = "HEALTHY",  100
+        elif failed_stages <= 1 or  critical_alerts <= 2 or  dq_score >= 70: health, score = "WARNING",  65
+        else:                                                                  health, score = "CRITICAL", 30
 
         ai_analysis = (self._claude_explain(stats, alerts, dq)
                        if ANTHROPIC_API_KEY
@@ -393,20 +385,20 @@ class PipelineHealthAgent:
                             f"Alerts: {critical_alerts} | DQ: {dq_score:.1f}%\n"
                             f"Set ANTHROPIC_API_KEY for AI analysis.")
 
-        return {"health_status":health, "health_score":score,
-                "failed_stages":failed_stages, "active_alerts":critical_alerts,
-                "dq_score":dq_score, "ai_analysis":ai_analysis,
-                "latency_seconds": round(time.time()-start, 2),
+        return {"health_status": health, "health_score": score,
+                "failed_stages": failed_stages, "active_alerts": critical_alerts,
+                "dq_score": dq_score, "ai_analysis": ai_analysis,
+                "latency_seconds": round(time.time() - start, 2),
                 "orchestration_run_id": run_id,
-                "timestamp":datetime.now().isoformat()}
+                "timestamp": datetime.now().isoformat()}
 
     def _claude_explain(self, stats, alerts, dq) -> str:
         try:
             import anthropic
             client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-            msg    = client.messages.create(
+            msg = client.messages.create(
                 model="claude-sonnet-4-20250514", max_tokens=500,
-                messages=[{"role":"user","content":f"""
+                messages=[{"role": "user", "content": f"""
 Expert Data Engineer for car booking pipeline.
 Stack: Kafka → Spark 3.4.2 → Delta Lake (Bronze/Silver/Curated) → PostgreSQL → Plotly Dash
 CI/CD: Jenkins | DQ: Great Expectations (27+ rules) → MySQL | Staging: 36-column table
@@ -436,26 +428,22 @@ Provide:
 # 3. ANOMALY EXPLAINER AGENT
 # ══════════════════════════════════════════════════════════════════
 class AnomalyExplainerAgent:
-    """
-    Explains why a booking (from ml_fraud_scores) is suspicious.
-    Context stats from customer_booking_staging (36 cols).
-    """
 
     def explain(self, anomaly_record: dict, run_id: Optional[str] = None) -> dict:
         context = self._get_context()
         if not ANTHROPIC_API_KEY:
-            return {"booking_id":  anomaly_record.get("booking_id","?"),
+            return {"booking_id":  anomaly_record.get("booking_id", "?"),
                     "explanation": f"Risk score: {anomaly_record.get('fraud_risk_score')} | "
                                    f"Route: {anomaly_record.get('route')} | "
                                    f"Set ANTHROPIC_API_KEY for full explanation.",
                     "orchestration_run_id": run_id,
-                    "timestamp":   datetime.now().isoformat()}
+                    "timestamp": datetime.now().isoformat()}
         try:
             import anthropic
             client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-            msg    = client.messages.create(
+            msg = client.messages.create(
                 model="claude-sonnet-4-20250514", max_tokens=400,
-                messages=[{"role":"user","content":f"""
+                messages=[{"role": "user", "content": f"""
 Fraud analyst for car booking platform. Table: {STAGING_TABLE} (36 columns).
 
 Suspicious Booking:
@@ -468,21 +456,21 @@ Explain:
 1. WHY suspicious — cite specific field values vs normal patterns
 2. RISK LEVEL: Low/Medium/High/Critical
 3. ACTION: Block/Review/Monitor/Allow
-4. PATTERN: Known fraud type (unusual route, odd hour, split payment, etc.)?
+4. PATTERN: Known fraud type?
 """}])
-            return {"booking_id":  anomaly_record.get("booking_id","?"),
+            return {"booking_id":  anomaly_record.get("booking_id", "?"),
                     "explanation": msg.content[0].text,
                     "orchestration_run_id": run_id,
-                    "timestamp":   datetime.now().isoformat()}
+                    "timestamp": datetime.now().isoformat()}
         except Exception as e:
-            return {"booking_id":  anomaly_record.get("booking_id","?"),
+            return {"booking_id":  anomaly_record.get("booking_id", "?"),
                     "explanation": f"Error: {e}",
-                    "timestamp":   datetime.now().isoformat()}
+                    "timestamp": datetime.now().isoformat()}
 
     def _get_context(self) -> dict:
         try:
-            conn = get_pg_conn()
-            df   = pd.read_sql(f"""
+            # ✅ FIX 4: PG_ENGINE use ho raha hai
+            df = pd.read_sql(f"""
                 SELECT
                     ROUND(AVG(payment_amount)::numeric,0)   AS avg_payment,
                     ROUND(MAX(payment_amount)::numeric,0)   AS max_payment,
@@ -495,8 +483,7 @@ Explain:
                     SUM(is_high_value_customer::int)         AS high_value_customers,
                     COUNT(*)                                 AS total_bookings
                 FROM {STAGING_TABLE}
-            """, conn)
-            conn.close()
+            """, PG_ENGINE)
             return df.iloc[0].to_dict() if not df.empty else {}
         except Exception:
             return {}
@@ -506,10 +493,6 @@ Explain:
 # 4. BOOKING RAG AGENT
 # ══════════════════════════════════════════════════════════════════
 class BookingRAGAgent:
-    """
-    Semantic search over customer_booking_staging via pgvector.
-    Requires: CREATE EXTENSION IF NOT EXISTS vector; in PostgreSQL
-    """
 
     COLLECTION = "car_booking_embeddings"
 
@@ -530,8 +513,8 @@ class BookingRAGAgent:
         if not self._enabled: return 0
         from langchain.schema import Document
 
-        conn = get_pg_conn()
-        df   = pd.read_sql(f"""
+        # ✅ FIX 4: PG_ENGINE use ho raha hai
+        df = pd.read_sql(f"""
             SELECT booking_id, customer_id, customer_name,
                    loyalty_tier, points_tier, is_high_value_customer,
                    model, car_segment, route, trip_type,
@@ -540,7 +523,7 @@ class BookingRAGAgent:
                    is_digital_payment, is_split_payment,
                    insurance_coverage, booking_date
             FROM {STAGING_TABLE} LIMIT {limit}
-        """, conn); conn.close()
+        """, PG_ENGINE)
 
         docs = []
         for _, row in df.iterrows():
@@ -573,9 +556,9 @@ class BookingRAGAgent:
         try:
             import anthropic
             client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-            msg    = client.messages.create(
+            msg = client.messages.create(
                 model="claude-sonnet-4-20250514", max_tokens=300,
-                messages=[{"role":"user","content":
+                messages=[{"role": "user", "content":
                            f"Booking records:\n{context}\n\nQuestion: {question}\n"
                            f"Give specific data-driven answer."}])
             return {"question": question, "answer": msg.content[0].text,
@@ -588,20 +571,9 @@ class BookingRAGAgent:
 
 
 # ══════════════════════════════════════════════════════════════════
-# 5. MODEL EVALUATION AGENT  ← NEW
-# MLflow pe Prophet MAPE, XGBoost AUC/Precision/Recall log karta hai
+# 5. MODEL EVALUATION AGENT
 # ══════════════════════════════════════════════════════════════════
 class ModelEvaluationAgent:
-    """
-    ML model evaluation + MLflow tracking.
-
-    Tracks:
-    - Prophet: MAPE (Mean Absolute Percentage Error)
-    - Isolation Forest: Contamination rate, high-risk count
-    - XGBoost: AUC, Precision, Recall, F1
-
-    Dashboard: http://localhost:5000
-    """
 
     def __init__(self):
         self.mlflow = _get_mlflow_client()
@@ -617,41 +589,38 @@ class ModelEvaluationAgent:
 
     def evaluate_prophet(self) -> dict:
         """
-        Prophet accuracy:
-        Predicted vs actual bookings — last 7 days mein kitna sahi tha
+        ✅ FIX 1: Date range fix — last 30 days actual vs forecast match karega
         """
         try:
-            conn = get_pg_conn()
-
-            # Actual bookings last 7 days
+            # ✅ FIX 1: Last 30 days ka actual data
             actual = pd.read_sql(f"""
                 SELECT booking_date::date AS date,
                        COUNT(*) AS actual_bookings
                 FROM {STAGING_TABLE}
-                WHERE booking_date >= CURRENT_DATE - INTERVAL '7 days'
+                WHERE booking_date >= CURRENT_DATE - INTERVAL '30 days'
                 GROUP BY booking_date::date
                 ORDER BY date
-            """, conn)
+            """, PG_ENGINE)
 
-            # Prophet forecast for same period
+            # ✅ FIX 1: Forecast table se saari dates lo (date filter nahi)
             forecast = pd.read_sql("""
                 SELECT forecast_date::date AS date,
                        predicted_bookings
                 FROM ml_demand_forecast
-                WHERE forecast_date >= CURRENT_DATE - INTERVAL '7 days'
                 ORDER BY date
-            """, conn) if self._table_exists(conn, "ml_demand_forecast") else pd.DataFrame()
-
-            conn.close()
+            """, PG_ENGINE) if self._table_exists("ml_demand_forecast") else pd.DataFrame()
 
             if actual.empty or forecast.empty:
+                logger.warning("[ModelEval] Prophet: actual ya forecast data nahi mila")
                 return {"status": "no_data", "mape": None}
 
             merged = actual.merge(forecast, on="date", how="inner")
             if merged.empty:
-                return {"status": "no_overlap", "mape": None}
+                logger.warning("[ModelEval] Prophet: actual aur forecast dates overlap nahi kar rahe")
+                return {"status": "no_overlap", "mape": None,
+                        "actual_dates": str(actual["date"].tolist()[:5]),
+                        "forecast_dates": str(forecast["date"].tolist()[:5])}
 
-            # MAPE = Mean Absolute Percentage Error
             mape = float((
                 (merged["actual_bookings"] - merged["predicted_bookings"]).abs()
                 / merged["actual_bookings"].clip(lower=1)
@@ -659,7 +628,6 @@ class ModelEvaluationAgent:
 
             accuracy = round(100 - mape, 1)
 
-            # Log to MLflow
             if self.mlflow:
                 try:
                     with self.mlflow.start_run(run_name=f"prophet_eval_{datetime.now().strftime('%Y%m%d_%H%M')}"):
@@ -673,11 +641,11 @@ class ModelEvaluationAgent:
                     logger.warning(f"[MLflow] Prophet log failed: {e}")
 
             return {
-                "status":   "success",
-                "mape":     round(mape, 2),
-                "accuracy": accuracy,
+                "status":    "success",
+                "mape":      round(mape, 2),
+                "accuracy":  accuracy,
                 "eval_days": len(merged),
-                "verdict":  "good" if mape < 15 else ("acceptable" if mape < 30 else "needs_retraining")
+                "verdict":   "good" if mape < 15 else ("acceptable" if mape < 30 else "needs_retraining")
             }
         except Exception as e:
             logger.error(f"[ModelEval] Prophet eval failed: {e}")
@@ -685,15 +653,14 @@ class ModelEvaluationAgent:
 
     def evaluate_fraud(self) -> dict:
         """
-        Isolation Forest stats:
-        Risk distribution, high-risk bookings count
+        ✅ FIX 2: Fraud threshold realistic — 10% → 30%
+        Isolation Forest contamination=0.1 default matlab 10% hamesha flagged hoga
         """
         try:
-            conn = get_pg_conn()
-            if not self._table_exists(conn, "ml_fraud_scores"):
-                conn.close()
+            if not self._table_exists("ml_fraud_scores"):
                 return {"status": "no_data"}
 
+            # ✅ FIX 4: PG_ENGINE use ho raha hai
             df = pd.read_sql("""
                 SELECT risk_label,
                        COUNT(*) AS count,
@@ -701,24 +668,22 @@ class ModelEvaluationAgent:
                 FROM ml_fraud_scores
                 GROUP BY risk_label
                 ORDER BY avg_score DESC
-            """, conn)
+            """, PG_ENGINE)
 
-            total = pd.read_sql("SELECT COUNT(*) AS total FROM ml_fraud_scores", conn)
-            conn.close()
+            total = pd.read_sql("SELECT COUNT(*) AS total FROM ml_fraud_scores", PG_ENGINE)
 
-            total_count   = int(total["total"].iloc[0])
-            critical_count= int(df[df["risk_label"]=="CRITICAL"]["count"].sum()) if not df.empty else 0
-            high_count    = int(df[df["risk_label"]=="HIGH"]["count"].sum())     if not df.empty else 0
-            fraud_rate    = round((critical_count + high_count) / max(total_count, 1) * 100, 2)
+            total_count    = int(total["total"].iloc[0])
+            critical_count = int(df[df["risk_label"] == "CRITICAL"]["count"].sum()) if not df.empty else 0
+            high_count     = int(df[df["risk_label"] == "HIGH"]["count"].sum())     if not df.empty else 0
+            fraud_rate     = round((critical_count + high_count) / max(total_count, 1) * 100, 2)
 
-            # Log to MLflow
             if self.mlflow:
                 try:
                     with self.mlflow.start_run(run_name=f"fraud_eval_{datetime.now().strftime('%Y%m%d_%H%M')}"):
-                        self.mlflow.log_metric("fraud_rate_pct",    fraud_rate)
-                        self.mlflow.log_metric("critical_bookings", critical_count)
-                        self.mlflow.log_metric("high_risk_bookings",high_count)
-                        self.mlflow.log_metric("total_scored",      total_count)
+                        self.mlflow.log_metric("fraud_rate_pct",     fraud_rate)
+                        self.mlflow.log_metric("critical_bookings",  critical_count)
+                        self.mlflow.log_metric("high_risk_bookings", high_count)
+                        self.mlflow.log_metric("total_scored",       total_count)
                         self.mlflow.set_tag("model_type", "fraud_detection")
                         self.mlflow.set_tag("algorithm",  "isolation_forest")
                         logger.info(f"[MLflow] Fraud logged — rate: {fraud_rate}%")
@@ -726,37 +691,32 @@ class ModelEvaluationAgent:
                     logger.warning(f"[MLflow] Fraud log failed: {e}")
 
             return {
-                "status":           "success",
-                "total_scored":     total_count,
-                "critical_count":   critical_count,
-                "high_risk_count":  high_count,
-                "fraud_rate_pct":   fraud_rate,
-                "verdict": "alert" if fraud_rate > 10 else ("monitor" if fraud_rate > 5 else "normal")
+                "status":         "success",
+                "total_scored":   total_count,
+                "critical_count": critical_count,
+                "high_risk_count": high_count,
+                "fraud_rate_pct": fraud_rate,
+                # ✅ FIX 2: Realistic thresholds — Isolation Forest contamination consider karo
+                "verdict": "alert"   if fraud_rate > 30
+                      else "monitor" if fraud_rate > 15
+                      else "normal"
             }
         except Exception as e:
             logger.error(f"[ModelEval] Fraud eval failed: {e}")
             return {"status": "error", "error": str(e)}
 
     def evaluate_churn(self) -> dict:
-        """
-        XGBoost churn model evaluation:
-        AUC already saved in ml_churn_scores — pull + log to MLflow
-        Precision/Recall from risk distribution
-        """
         try:
-            conn = get_pg_conn()
-            if not self._table_exists(conn, "ml_churn_scores"):
-                conn.close()
+            if not self._table_exists("ml_churn_scores"):
                 return {"status": "no_data"}
 
-            # AUC from saved model run
+            # ✅ FIX 4: PG_ENGINE use ho raha hai
             auc_df = pd.read_sql("""
                 SELECT model_auc, created_at
                 FROM ml_churn_scores
                 ORDER BY created_at DESC LIMIT 1
-            """, conn)
+            """, PG_ENGINE)
 
-            # Risk distribution for precision/recall proxy
             dist = pd.read_sql("""
                 SELECT churn_risk,
                        COUNT(*) AS count,
@@ -764,27 +724,23 @@ class ModelEvaluationAgent:
                 FROM ml_churn_scores
                 GROUP BY churn_risk
                 ORDER BY avg_prob DESC
-            """, conn)
-
-            conn.close()
+            """, PG_ENGINE)
 
             auc = float(auc_df["model_auc"].iloc[0]) if not auc_df.empty else 0.0
 
-            high_risk  = int(dist[dist["churn_risk"].isin(["HIGH","CRITICAL"])]["count"].sum()) if not dist.empty else 0
+            high_risk  = int(dist[dist["churn_risk"].isin(["HIGH", "CRITICAL"])]["count"].sum()) if not dist.empty else 0
             total_ch   = int(dist["count"].sum()) if not dist.empty else 0
             churn_rate = round(high_risk / max(total_ch, 1) * 100, 2)
 
-            # Log to MLflow
             if self.mlflow:
                 try:
                     with self.mlflow.start_run(run_name=f"churn_eval_{datetime.now().strftime('%Y%m%d_%H%M')}"):
-                        self.mlflow.log_metric("xgb_auc",          auc)
-                        self.mlflow.log_metric("churn_rate_pct",   churn_rate)
-                        self.mlflow.log_metric("high_risk_customers", high_risk)
-                        self.mlflow.log_metric("total_scored",     total_ch)
+                        self.mlflow.log_metric("xgb_auc",               auc)
+                        self.mlflow.log_metric("churn_rate_pct",        churn_rate)
+                        self.mlflow.log_metric("high_risk_customers",   high_risk)
+                        self.mlflow.log_metric("total_scored",          total_ch)
                         self.mlflow.set_tag("model_type", "churn_prediction")
                         self.mlflow.set_tag("algorithm",  "xgboost")
-                        # Retrain trigger — AUC girne pe alert
                         if auc < 0.70:
                             self.mlflow.set_tag("action_required", "RETRAIN")
                         logger.info(f"[MLflow] Churn logged — AUC: {auc:.3f}")
@@ -797,41 +753,27 @@ class ModelEvaluationAgent:
                 "churn_rate_pct":      churn_rate,
                 "high_risk_customers": high_risk,
                 "total_scored":        total_ch,
-                "verdict":  "good"     if auc >= 0.80
-                       else "acceptable" if auc >= 0.70
-                       else "needs_retraining"
+                "verdict": "good"          if auc >= 0.80
+                      else "acceptable"    if auc >= 0.70
+                      else "needs_retraining"
             }
         except Exception as e:
             logger.error(f"[ModelEval] Churn eval failed: {e}")
             return {"status": "error", "error": str(e)}
 
-    def _table_exists(self, conn, table: str) -> bool:
+    def _table_exists(self, table: str) -> bool:
+        """✅ FIX 4: PG_ENGINE use karo — connection object nahi"""
         try:
-            cur = conn.cursor()
-            cur.execute(f"SELECT 1 FROM {table} LIMIT 1")
-            cur.close()
+            pd.read_sql(f"SELECT 1 FROM {table} LIMIT 1", PG_ENGINE)
             return True
         except Exception:
-            conn.rollback()
             return False
 
 
 # ══════════════════════════════════════════════════════════════════
-# 6. BOOKING INTELLIGENCE ORCHESTRATOR  ← NEW — Multi-Agent
+# 6. BOOKING INTELLIGENCE ORCHESTRATOR
 # ══════════════════════════════════════════════════════════════════
 class BookingIntelligenceOrchestrator:
-    """
-    Master coordinator — sab agents ko ek saath chalata hai.
-
-    Flow:
-    1. TextToSQLAgent   → data nikalo
-    2. AnomalyExplainer → fraud check karo
-    3. PipelineHealth   → pipeline status lo
-    4. ModelEvaluation  → ML metrics lo
-    5. Claude           → sab combine karke final insight do
-
-    Ye hai actual Multi-Agent Orchestration.
-    """
 
     def __init__(self):
         self.run_id        = f"orch_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -842,22 +784,15 @@ class BookingIntelligenceOrchestrator:
         logger.info(f"[Orchestrator] Initialized — run_id: {self.run_id}")
 
     def full_intelligence_report(self, question: str = "Give me a complete business intelligence report") -> dict:
-        """
-        Sab agents coordinate karke ek complete report banate hain.
-        Ye single question pe sab kuch answer karta hai.
-        """
         start = time.time()
         logger.info(f"[Orchestrator] Starting full report — run_id: {self.run_id}")
 
-        # ── Step 1: Data Query ───────────────────────────────────
         logger.info("[Orchestrator] Step 1/4 — TextToSQL querying data...")
         sql_result = self.sql_agent.query(question, run_id=self.run_id)
 
-        # ── Step 2: Pipeline Health ──────────────────────────────
         logger.info("[Orchestrator] Step 2/4 — PipelineHealth checking status...")
         health_result = self.health_agent.analyze(run_id=self.run_id)
 
-        # ── Step 3: Top Fraud Alert ──────────────────────────────
         logger.info("[Orchestrator] Step 3/4 — AnomalyExplainer checking fraud...")
         fraud_result = self._get_top_fraud_booking()
         if fraud_result:
@@ -865,11 +800,9 @@ class BookingIntelligenceOrchestrator:
         else:
             fraud_explanation = {"explanation": "No high-risk bookings detected — pipeline clean"}
 
-        # ── Step 4: Model Evaluation ─────────────────────────────
         logger.info("[Orchestrator] Step 4/4 — ModelEval checking ML metrics...")
         eval_result = self.eval_agent.evaluate_all()
 
-        # ── Step 5: Claude Orchestrates Final Insight ────────────
         logger.info("[Orchestrator] Synthesizing with Claude...")
         final_insight = self._synthesize(
             question, sql_result, health_result, fraud_explanation, eval_result)
@@ -893,23 +826,18 @@ class BookingIntelligenceOrchestrator:
         }
 
     def quick_answer(self, question: str) -> dict:
-        """
-        Sirf TextToSQL + Claude — fast response ke liye
-        Dashboard chat box mein use hota hai
-        """
         start      = time.time()
         sql_result = self.sql_agent.query(question, run_id=self.run_id)
 
         if not ANTHROPIC_API_KEY:
             return sql_result
 
-        # Claude SQL result ko polish karta hai
         try:
             import anthropic
             client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-            msg    = client.messages.create(
+            msg = client.messages.create(
                 model="claude-sonnet-4-20250514", max_tokens=250,
-                messages=[{"role":"user","content":f"""
+                messages=[{"role": "user", "content": f"""
 Car booking data analyst. Be concise and specific.
 
 Raw data result:
@@ -925,7 +853,7 @@ Give 2-3 sentence insight with specific numbers.
                 "answer":          msg.content[0].text,
                 "raw_data":        sql_result.get("answer", ""),
                 "mode":            "orchestrated",
-                "latency_seconds": round(time.time()-start, 2),
+                "latency_seconds": round(time.time() - start, 2),
                 "run_id":          self.run_id,
                 "timestamp":       datetime.now().isoformat(),
             }
@@ -933,10 +861,9 @@ Give 2-3 sentence insight with specific numbers.
             return sql_result
 
     def _get_top_fraud_booking(self) -> Optional[dict]:
-        """Top CRITICAL fraud booking nikalo for explanation"""
         try:
-            conn = get_pg_conn()
-            df   = pd.read_sql(f"""
+            # ✅ FIX 4: PG_ENGINE use ho raha hai
+            df = pd.read_sql(f"""
                 SELECT f.booking_id, f.fraud_risk_score, f.risk_label,
                        s.customer_name, s.route, s.trip_type,
                        s.pickup_hour, s.payment_method, s.payment_amount,
@@ -946,8 +873,7 @@ Give 2-3 sentence insight with specific numbers.
                 WHERE f.risk_label = 'CRITICAL'
                 ORDER BY f.fraud_risk_score DESC
                 LIMIT 1
-            """, conn)
-            conn.close()
+            """, PG_ENGINE)
             return df.iloc[0].to_dict() if not df.empty else None
         except Exception as e:
             logger.warning(f"[Orchestrator] fraud booking fetch failed: {e}")
@@ -955,13 +881,12 @@ Give 2-3 sentence insight with specific numbers.
 
     def _synthesize(self, question, sql_result, health_result,
                     fraud_explanation, eval_result) -> str:
-        """Claude synthesizes all agent outputs into one insight"""
         if not ANTHROPIC_API_KEY:
             return (
-                f"Pipeline: {health_result.get('health_status','UNKNOWN')} | "
-                f"DQ: {health_result.get('dq_score',0):.1f}% | "
-                f"Prophet: {eval_result.get('prophet',{}).get('mape','?')}% MAPE | "
-                f"XGBoost AUC: {eval_result.get('xgboost',{}).get('xgb_auc','?')} | "
+                f"Pipeline: {health_result.get('health_status', 'UNKNOWN')} | "
+                f"DQ: {health_result.get('dq_score', 0):.1f}% | "
+                f"Prophet: {eval_result.get('prophet', {}).get('mape', '?')}% MAPE | "
+                f"XGBoost AUC: {eval_result.get('xgboost', {}).get('xgb_auc', '?')} | "
                 f"Set ANTHROPIC_API_KEY for AI synthesis."
             )
         try:
@@ -974,7 +899,7 @@ Give 2-3 sentence insight with specific numbers.
 
             msg = client.messages.create(
                 model="claude-sonnet-4-20250514", max_tokens=600,
-                messages=[{"role":"user","content":f"""
+                messages=[{"role": "user", "content": f"""
 You are the AI Intelligence layer for a car booking data pipeline.
 You have just coordinated 4 specialized agents. Synthesize their findings.
 
@@ -992,7 +917,7 @@ Failed stages: {health_result.get('failed_stages', 0)}
 
 3. FRAUD AGENT (Isolation Forest):
 Fraud rate: {fraud_rate}%
-Top alert: {str(fraud_explanation.get('explanation','none'))[:200]}
+Top alert: {str(fraud_explanation.get('explanation', 'none'))[:200]}
 
 4. MODEL EVALUATION AGENT:
 Prophet MAPE: {prophet_mape}% (lower = better)
@@ -1011,42 +936,38 @@ Be specific with numbers. Flag any concerns clearly.
 # QUICK TEST
 # ══════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("  AI AGENTS v2 — Car Booking Pipeline")
-    print("="*60)
-    print(f"  PG      : {PG_CONN_PARAMS['host']}:{PG_CONN_PARAMS['port']}/{PG_CONN_PARAMS['database']}")
-    print(f"  MySQL   : {MYSQL_CONN_PARAMS['host']}:{MYSQL_CONN_PARAMS['port']}/{MYSQL_CONN_PARAMS['database']}")
-    print(f"  Table   : {STAGING_TABLE} (36 columns)")
-    print(f"  Claude  : {'✓ enabled' if ANTHROPIC_API_KEY else '○ not set (SQL fallback)'}")
-    print(f"  MLflow  : {'✓ ' + MLFLOW_TRACKING_URI if True else '○ not configured'}")
+    print("=" * 60)
+    print(f"  PG       : {PG_CONN_PARAMS['host']}:{PG_CONN_PARAMS['port']}/{PG_CONN_PARAMS['database']}")
+    print(f"  MySQL    : {MYSQL_CONN_PARAMS['host']}:{MYSQL_CONN_PARAMS['port']}/{MYSQL_CONN_PARAMS['database']}")
+    print(f"  Table    : {STAGING_TABLE} (36 columns)")
+    print(f"  Claude   : {'✓ enabled' if ANTHROPIC_API_KEY else '○ not set (SQL fallback)'}")
+    print(f"  MLflow   : {MLFLOW_TRACKING_URI}")
     print(f"  LangSmith: {'✓ enabled' if LANGSMITH_ENABLED else '○ not configured'}")
-    print("="*60 + "\n")
+    print("=" * 60 + "\n")
 
-    # Test 1: Quick single agent
     print("1. TextToSQLAgent — routes")
     print(TextToSQLAgent().query("top routes by bookings")["answer"][:200])
     print()
 
-    # Test 2: Pipeline health
     print("2. PipelineHealthAgent")
     h = PipelineHealthAgent().analyze()
     print(f"   Status: {h['health_status']} | DQ: {h['dq_score']:.1f}%")
     print()
 
-    # Test 3: Model evaluation + MLflow
     print("3. ModelEvaluationAgent")
     ev = ModelEvaluationAgent().evaluate_all()
-    print(f"   Prophet MAPE  : {ev.get('prophet',{}).get('mape','N/A')}%")
-    print(f"   Fraud rate    : {ev.get('isolation_forest',{}).get('fraud_rate_pct','N/A')}%")
-    print(f"   XGBoost AUC   : {ev.get('xgboost',{}).get('xgb_auc','N/A')}")
+    print(f"   Prophet MAPE  : {ev.get('prophet', {}).get('mape', 'N/A')}%")
+    print(f"   Fraud rate    : {ev.get('isolation_forest', {}).get('fraud_rate_pct', 'N/A')}%")
+    print(f"   XGBoost AUC   : {ev.get('xgboost', {}).get('xgb_auc', 'N/A')}")
     print()
 
-    # Test 4: Full orchestration
     print("4. BookingIntelligenceOrchestrator — Full Report")
     orch   = BookingIntelligenceOrchestrator()
     report = orch.full_intelligence_report("What is the overall business performance?")
-    print(f"   Run ID         : {report['run_id']}")
-    print(f"   Pipeline       : {report['pipeline_health']}")
-    print(f"   Total latency  : {report['total_latency_sec']}s")
-    print(f"   Agents used    : {', '.join(report['agents_used'])}")
+    print(f"   Run ID        : {report['run_id']}")
+    print(f"   Pipeline      : {report['pipeline_health']}")
+    print(f"   Total latency : {report['total_latency_sec']}s")
+    print(f"   Agents used   : {', '.join(report['agents_used'])}")
     print(f"\n   FINAL INSIGHT:\n   {report['final_insight'][:300]}")

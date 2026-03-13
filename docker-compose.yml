@@ -33,11 +33,12 @@ services:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_HEAP_OPTS: "-Xmx128M -Xms128M"
     healthcheck:
-      test: ["CMD-SHELL", "echo ruok | nc localhost 2181 | grep imok"]
+      # ✅ FIX 1: nc available nahi hota — zkServer.sh use karo
+      test: ["CMD-SHELL", "zkServer.sh status || exit 1"]
       interval: 10s
       timeout: 10s
       retries: 10
-      start_period: 30s
+      start_period: 40s
     networks:
       - car-booking-network
 
@@ -50,7 +51,8 @@ services:
     memswap_limit: 512m
     depends_on:
       zookeeper:
-        condition: service_started
+        # ✅ FIX 2: service_started → service_healthy
+        condition: service_healthy
     ports:
       - "9092:9092"
     environment:
@@ -119,8 +121,6 @@ services:
       - car-booking-network
 
   # ── SPARK ──────────────────────────────────────────────────────
-  # mem_limit 2g — sequential transforms mein ek waqt 1 job
-  # 512m driver + 256m executor + overhead = ~1g comfortable fit
   spark:
     image: apache/spark:3.4.2
     container_name: spark-master
@@ -251,7 +251,6 @@ services:
       - car-booking-network
 
   # ── MLFLOW ─────────────────────────────────────────────────────
-  # Spark khatam hone ke baad chalta hai — memory free hoti hai
   mlflow:
     image: ghcr.io/mlflow/mlflow:latest
     container_name: mlflow
@@ -269,17 +268,16 @@ services:
     volumes:
       - mlflow_data:/mlflow
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      # ✅ FIX 3: /health exist nahi karta — sahi endpoint use karo
+      test: ["CMD", "curl", "-f", "http://localhost:5000/api/2.0/mlflow/experiments/list"]
       interval: 15s
       timeout: 10s
       retries: 5
-      start_period: 20s
+      start_period: 30s
     networks:
       - car-booking-network
 
   # ── DASHBOARD ──────────────────────────────────────────────────
-  # Claude API = network call, no local compute
-  # 512m dashboard mein comfortably fit ✅
   dashboard:
     build:
       context: ./realtime_dashboard

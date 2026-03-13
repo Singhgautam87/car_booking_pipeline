@@ -21,7 +21,7 @@ pipeline {
         DELTA_CONF      = """${sh(script: "python3 -c \"import json; c=json.load(open('config/config.json')); s=c['spark']; print('--conf spark.sql.extensions='+s['delta_extension']+' --conf spark.sql.catalog.spark_catalog='+s['delta_catalog'])\"", returnStdout: true).trim()}"""
         S3_CONF         = """${sh(script: "python3 -c \"import json; c=json.load(open('config/config.json')); m=c['minio']; print('--conf spark.hadoop.fs.s3a.endpoint='+m['endpoint']+' --conf spark.hadoop.fs.s3a.access.key='+m['access_key']+' --conf spark.hadoop.fs.s3a.secret.key='+m['secret_key']+' --conf spark.hadoop.fs.s3a.path.style.access=true --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem')\"", returnStdout: true).trim()}"""
         // ✅ config.json se load — driver_memory=1g, executor_memory=1g, shuffle_partitions=4
-        SPARK_MEMORY    = """${sh(script: "python3 -c \"import json; c=json.load(open('config/config.json')); s=c['spark']; print('--driver-memory '+s['driver_memory']+' --executor-memory '+s['executor_memory']+' --conf spark.driver.maxResultSize='+s['max_result_size']+' --conf spark.sql.shuffle.partitions='+s['shuffle_partitions']+' --conf spark.memory.fraction='+s['memory_fraction'])\"", returnStdout: true).trim()}"""
+        SPARK_MEMORY    = """${sh(script: "python3 -c \"import json; c=json.load(open('config/config.json')); s=c['spark']; print('--driver-memory '+s['driver_memory']+' --executor-memory '+s['executor_memory']+' --conf spark.driver.maxResultSize='+s['max_result_size'])\"", returnStdout: true).trim()}"""
 
         // ✅ Single RUN_ID shared across ALL stages — consistent tracking in MySQL
         PIPELINE_RUN_ID = """${sh(script: "date +%Y%m%d_%H%M%S", returnStdout: true).trim()}"""
@@ -470,7 +470,7 @@ pipeline {
                             xgboost prophet joblib --quiet
 
                         echo "=== Running ML Models ==="
-                        docker exec spark-master python /opt/spark-apps/jobs/ml_models.py
+                        docker exec spark-master python3 /opt/spark-apps/jobs/ml_models.py
 
                         FORECAST_COUNT=$(docker exec postgres psql -U admin -d booking -t -c \
                             "SELECT COUNT(*) FROM ml_demand_forecast;" 2>/dev/null | tr -d ' ' || echo "0")
@@ -529,7 +529,7 @@ pipeline {
                         docker exec \
                             -e MLFLOW_TRACKING_URI=http://mlflow:5000 \
                             -e ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-} \
-                            spark-master python -c "
+                            spark-master python3 -c "
 import sys
 sys.path.insert(0, '/opt/spark-apps/lib')
 sys.path.insert(0, '/opt/spark-apps/jobs')

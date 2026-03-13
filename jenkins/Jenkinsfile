@@ -522,11 +522,14 @@ pipeline {
                         STAGE_START=$(date +%s)
                         echo "=== Model Evaluation + MLflow Tracking ==="
 
-                        docker exec spark-master pip install mlflow --quiet \
-                            --break-system-packages 2>/dev/null || \
-                        docker exec spark-master pip install mlflow --quiet
+                        # packaging version fix + root permissions
+                        docker exec -u root spark-master pip install \
+                            "packaging<25" mlflow-skinny \
+                            --quiet --break-system-packages 2>/dev/null || \
+                        docker exec -u root spark-master pip install \
+                            "packaging<25" mlflow-skinny --quiet
 
-                        docker exec \
+                        docker exec -u root \
                             -e MLFLOW_TRACKING_URI=http://mlflow:5000 \
                             -e ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-} \
                             spark-master python3 -c "

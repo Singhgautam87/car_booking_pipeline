@@ -523,10 +523,10 @@ pipeline {
                         echo "=== Model Evaluation + MLflow Tracking ==="
 
                         docker exec -u root spark-master pip install \
-                            "packaging<25" mlflow-skinny \
+                            "packaging<25" mlflow-skinny sqlalchemy \
                             --quiet --break-system-packages 2>/dev/null || \
                         docker exec -u root spark-master pip install \
-                            "packaging<25" mlflow-skinny --quiet
+                            "packaging<25" mlflow-skinny sqlalchemy --quiet
 
                         docker exec -u root \
                             -e MLFLOW_TRACKING_URI=http://mlflow:5000 \

@@ -21,7 +21,19 @@ pipeline {
         SPARK_MEMORY    = """${sh(script: "python3 -c \"import json; c=json.load(open('config/config.json')); s=c['spark']; print('--driver-memory '+s['driver_memory']+' --executor-memory '+s['executor_memory']+' --conf spark.driver.maxResultSize='+s['max_result_size'])\"", returnStdout: true).trim()}"""
 
         PIPELINE_RUN_ID  = """${sh(script: "date +%Y%m%d_%H%M%S", returnStdout: true).trim()}"""
+
+        // ✅ DB Credentials — single source of truth
         MYSQL_PWD        = "admin"
+        POSTGRES_USER    = "admin"
+        POSTGRES_PASSWORD= "admin"
+        POSTGRES_DB      = "booking"
+        MYSQL_USER       = "admin"
+        MYSQL_PASSWORD   = "admin"
+        MYSQL_DATABASE   = "booking"
+        MYSQL_ROOT_PASSWORD = "root"
+        MINIO_USER       = "admin"
+        MINIO_PASSWORD   = "admin123"
+
         // ✅ ML thresholds from config.json — single source of truth
         DQ_THRESHOLD     = """${sh(script: "python3 -c \"import json; c=json.load(open('config/config.json')); print(c['pipeline']['dq_threshold'])\"", returnStdout: true).trim()}"""
         CHURN_RETRAIN_AUC= """${sh(script: "python3 -c \"import json; c=json.load(open('config/config.json')); print(c['ml']['churn_retrain_auc'])\"", returnStdout: true).trim()}"""

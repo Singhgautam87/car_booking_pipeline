@@ -154,8 +154,31 @@ def save_failed_records(mysql_cfg, postgres_cfg, staging_table, run_id, results_
                     params   = {"min_val": min_val}
                 else:
                     continue
+            elif "greater_than" in exp_type or "less_than" in exp_type or "min" in exp_type or "max" in exp_type:
+                min_val = kwargs.get("min_value")
+                max_val = kwargs.get("max_value")
+                failed_reason = f"Value out of range [{min_val} - {max_val}]"
+                if min_val is not None and max_val is not None:
+                    pg_query = text(f"SELECT * FROM {staging_table} WHERE CAST({column_name} AS FLOAT) < :min_val OR CAST({column_name} AS FLOAT) > :max_val")
+                    params   = {"min_val": float(min_val), "max_val": float(max_val)}
+                elif min_val is not None:
+                    pg_query = text(f"SELECT * FROM {staging_table} WHERE CAST({column_name} AS FLOAT) < :min_val")
+                    params   = {"min_val": float(min_val)}
+                else:
+                    continue
+
+            elif "type" in exp_type or "match" in exp_type or "compound" in exp_type:
+                # Type/match expectations — sample failed records
+                failed_reason = f"Type/match expectation failed: {exp_type}"
+                pg_query = text(f"SELECT * FROM {staging_table} WHERE {column_name} IS NOT NULL LIMIT 50")
+                params = {}
+
             else:
-                continue
+                # ✅ PRODUCTION FIX: Generic fallback — no expectation silently skipped
+                # Capture any unknown expectation type with sample records
+                failed_reason = f"Expectation failed: {exp_type}"
+                pg_query = text(f"SELECT * FROM {staging_table} LIMIT 50")
+                params = {}
 
             with pg_engine.connect() as pg_conn:
                 rows = pg_conn.execute(pg_query, params).mappings().all()

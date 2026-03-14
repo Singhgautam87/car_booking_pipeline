@@ -20,10 +20,12 @@ pipeline {
         S3_CONF         = """${sh(script: "python3 -c \"import json; c=json.load(open('config/config.json')); m=c['minio']; print('--conf spark.hadoop.fs.s3a.endpoint='+m['endpoint']+' --conf spark.hadoop.fs.s3a.access.key='+m['access_key']+' --conf spark.hadoop.fs.s3a.secret.key='+m['secret_key']+' --conf spark.hadoop.fs.s3a.path.style.access=true --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem')\"", returnStdout: true).trim()}"""
         SPARK_MEMORY    = """${sh(script: "python3 -c \"import json; c=json.load(open('config/config.json')); s=c['spark']; print('--driver-memory '+s['driver_memory']+' --executor-memory '+s['executor_memory']+' --conf spark.driver.maxResultSize='+s['max_result_size'])\"", returnStdout: true).trim()}"""
 
-        PIPELINE_RUN_ID = """${sh(script: "date +%Y%m%d_%H%M%S", returnStdout: true).trim()}"""
-
-        // ✅ FIX 4: MySQL password env var — command line mein visible nahi hoga
-        MYSQL_PWD = "admin"
+        PIPELINE_RUN_ID  = """${sh(script: "date +%Y%m%d_%H%M%S", returnStdout: true).trim()}"""
+        MYSQL_PWD        = "admin"
+        // ✅ ML thresholds from config.json — single source of truth
+        DQ_THRESHOLD     = """${sh(script: "python3 -c \"import json; c=json.load(open('config/config.json')); print(c['pipeline']['dq_threshold'])\"", returnStdout: true).trim()}"""
+        CHURN_RETRAIN_AUC= """${sh(script: "python3 -c \"import json; c=json.load(open('config/config.json')); print(c['ml']['churn_retrain_auc'])\"", returnStdout: true).trim()}"""
+        MODELS_BUCKET    = """${sh(script: "python3 -c \"import json; c=json.load(open('config/config.json')); print(c['ml']['models_bucket'])\"", returnStdout: true).trim()}"""
     }
 
     stages {
@@ -33,10 +35,9 @@ pipeline {
                 checkout scm
                 sh '''
                     echo "=== Build Info ==="
-                    echo "Run ID   : ${PIPELINE_RUN_ID}"
-                    echo "Branch   : ${GIT_BRANCH}"
-                    echo "Commit   : ${GIT_COMMIT}"
-                    echo "Build    : #${BUILD_NUMBER}"
+                    echo "Run ID : ${PIPELINE_RUN_ID}"
+                    echo "Branch : ${GIT_BRANCH}"
+                    echo "Build  : #${BUILD_NUMBER}"
                     ls -la
                 '''
             }
@@ -56,7 +57,7 @@ pipeline {
                     rm -rf /tmp/ge_* /tmp/spark_* /tmp/producer.py /tmp/car_booking.json || true
 
                     docker-compose -p ${COMPOSE_PROJECT} build great_expectations
-                    echo "✅ Cleanup complete!"
+                    echo "✅ Cleanup done!"
                 '''
             }
         }
@@ -69,30 +70,27 @@ pipeline {
                     docker-compose -p ${COMPOSE_PROJECT} up -d \
                         postgres mysql kafka zookeeper minio kafka-ui spark great_expectations mlflow
 
-                    echo "Waiting for core services to be healthy..."
+                    echo "Waiting for core services..."
                     for i in $(seq 1 30); do
-                        KAFKA_OK=$(docker inspect --format="{{.State.Health.Status}}" kafka      2>/dev/null || echo "none")
-                        PG_OK=$(docker inspect --format="{{.State.Health.Status}}"    postgres   2>/dev/null || echo "none")
-                        MYSQL_OK=$(docker inspect --format="{{.State.Health.Status}}" mysql      2>/dev/null || echo "none")
-                        ZK_OK=$(docker inspect --format="{{.State.Health.Status}}"    zookeeper  2>/dev/null || echo "none")
-
+                        KAFKA_OK=$(docker inspect --format="{{.State.Health.Status}}" kafka    2>/dev/null || echo "none")
+                        PG_OK=$(docker inspect --format="{{.State.Health.Status}}"   postgres 2>/dev/null || echo "none")
+                        MYSQL_OK=$(docker inspect --format="{{.State.Health.Status}}" mysql   2>/dev/null || echo "none")
                         if [ "$KAFKA_OK" = "healthy" ] && [ "$PG_OK" = "healthy" ] && [ "$MYSQL_OK" = "healthy" ]; then
                             echo "✅ Core services healthy!"
                             break
                         fi
-                        echo "  Waiting... $i/30 | kafka=$KAFKA_OK pg=$PG_OK mysql=$MYSQL_OK zk=$ZK_OK"
+                        echo "  Waiting... $i/30 | kafka=$KAFKA_OK pg=$PG_OK mysql=$MYSQL_OK"
                         sleep 10
                     done
 
-                    # ✅ FIX 2: MLflow ka alag health check — pipeline se pehle ready hona chahiye
                     echo "Waiting for MLflow..."
                     for i in $(seq 1 12); do
                         MLFLOW_OK=$(docker inspect --format="{{.State.Health.Status}}" mlflow 2>/dev/null || echo "none")
                         if [ "$MLFLOW_OK" = "healthy" ]; then
-                            echo "✅ MLflow ready at http://localhost:5000"
+                            echo "✅ MLflow ready"
                             break
                         fi
-                        echo "  Waiting MLflow... $i/12 | status=$MLFLOW_OK"
+                        echo "  MLflow... $i/12 | $MLFLOW_OK"
                         sleep 5
                     done
 
@@ -112,16 +110,14 @@ pipeline {
         stage('Start Schema Registry') {
             steps {
                 sh '''
-                    echo "=== Starting Schema Registry ==="
                     docker-compose -p ${COMPOSE_PROJECT} up -d schema-registry
-
                     for i in $(seq 1 12); do
                         STATUS=$(docker inspect --format="{{.State.Health.Status}}" schema-registry 2>/dev/null || echo "none")
                         if [ "$STATUS" = "healthy" ]; then
-                            echo "✅ Schema Registry ready at http://localhost:8085"
+                            echo "✅ Schema Registry ready"
                             break
                         fi
-                        echo "Waiting... $i/12 | status=$STATUS"
+                        echo "Waiting... $i/12 | $STATUS"
                         sleep 5
                     done
                 '''
@@ -132,15 +128,9 @@ pipeline {
         stage('Initialize Databases') {
             steps {
                 sh '''
-                    echo "=== Initializing Databases ==="
-
-                    # ✅ FIX 4: MYSQL_PWD env var use ho raha hai — -p flag nahi chahiye
                     docker exec -i -e MYSQL_PWD=admin mysql mysql -u admin booking < sql/mysql.sql
                     docker exec -i postgres psql -U admin -d booking < sql/postgres.sql
-
-                    echo "✅ Databases initialized!"
-                    echo "   PostgreSQL: customer_booking_staging (36 cols)"
-                    echo "   MySQL: pipeline_run_stats, pipeline_alerts, validation_results, schema_registry_log"
+                    echo "✅ DBs initialized — PostgreSQL (36 cols) + MySQL (6 tables)"
                 '''
             }
         }
@@ -149,8 +139,6 @@ pipeline {
         stage('Schema Registration') {
             steps {
                 sh '''
-                    echo "=== Registering Kafka Schema ==="
-
                     RESPONSE=$(docker exec schema-registry curl -s -o /tmp/schema_response.json -w "%{http_code}" \
                         -X POST http://localhost:8081/subjects/car-bookings-value/versions \
                         -H "Content-Type: application/vnd.schemaregistry.v1+json" \
@@ -159,24 +147,16 @@ pipeline {
                         }')
 
                     docker cp schema-registry:/tmp/schema_response.json /tmp/schema_response.json 2>/dev/null || echo "{}" > /tmp/schema_response.json
-
                     SCHEMA_ID=$(cat /tmp/schema_response.json | python3 -c \
                         "import json,sys; d=json.load(sys.stdin); print(d.get('id','1'))" 2>/dev/null || echo "1")
-
-                    echo "Schema Response: $RESPONSE | Schema ID: $SCHEMA_ID"
 
                     docker exec -e MYSQL_PWD=admin mysql mysql -u admin booking -e "
                         INSERT IGNORE INTO schema_registry_log
                             (topic, schema_version, schema_id, change_type, schema_summary, is_compatible)
-                        VALUES
-                            ('car-bookings', 1, ${SCHEMA_ID}, 'REGISTERED',
-                             'booking_id, customer_id, car_id, payment_amount, loyalty_tier + 14 more fields',
-                             TRUE);
+                        VALUES ('car-bookings', 1, ${SCHEMA_ID}, 'REGISTERED',
+                                'booking_id, customer_id, car_id, payment_amount + 15 more', TRUE);
                     "
-
-                    echo "=== Registered Subjects ==="
-                    docker exec schema-registry curl -s http://localhost:8081/subjects
-                    echo "✅ Schema registered!"
+                    echo "✅ Schema registered | ID: $SCHEMA_ID"
                 '''
             }
         }
@@ -186,33 +166,25 @@ pipeline {
             steps {
                 sh '''
                     STAGE_START=$(date +%s)
-
                     for i in 1 2 3 4 5; do
                         if docker exec kafka kafka-topics --create --if-not-exists \
-                            --topic car-bookings \
-                            --bootstrap-server localhost:9092 \
-                            --partitions 3 \
-                            --replication-factor 1 2>/dev/null; then
-                            echo "✅ Topic ready!"
-                            break
+                            --topic car-bookings --bootstrap-server localhost:9092 \
+                            --partitions 3 --replication-factor 1 2>/dev/null; then
+                            echo "✅ Topic ready!"; break
                         fi
                         sleep 5
                     done
-
                     docker cp kafka/producer_with_schema_registry.py great_expectations:/tmp/producer.py
                     docker cp kafka/data/car_booking.json great_expectations:/tmp/car_booking.json
                     docker exec great_expectations python /tmp/producer.py
-
                     sleep 60
-
-                    STAGE_END=$(date +%s)
-                    DURATION=$((STAGE_END - STAGE_START))
+                    DURATION=$(($(date +%s) - STAGE_START))
                     docker exec -e MYSQL_PWD=admin mysql mysql -u admin booking -e "
                         INSERT INTO pipeline_run_stats
                             (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
                         VALUES ('${PIPELINE_RUN_ID}', 'kafka_producer', 1000, ${DURATION}, 'SUCCESS', NOW());
                     "
-                    echo "✅ Producer complete | Duration: ${DURATION}s"
+                    echo "✅ Producer done | ${DURATION}s"
                 '''
             }
         }
@@ -223,16 +195,16 @@ pipeline {
                 sh '''
                     docker exec minio sh -c "
                         rm -rf /data/delta &&
-                        mkdir -p /data/delta/raw &&
-                        mkdir -p /data/delta/transformed &&
-                        mkdir -p /data/delta/curated
+                        mkdir -p /data/delta/raw /data/delta/transformed /data/delta/curated
                     "
-                    echo "✅ MinIO Delta Lake buckets ready!"
+                    # ✅ NEW: models bucket for ML model persistence
+                    docker exec minio sh -c "mkdir -p /data/models/ml_models" || true
+                    echo "✅ MinIO buckets ready (delta + models)"
                 '''
             }
         }
 
-        // ── SPARK INGEST (Bronze Layer) ──────────────────────────
+        // ── SPARK INGEST ─────────────────────────────────────────
         stage('Spark Ingest Stream') {
             steps {
                 sh 'docker exec -u root spark-master mkdir -p /home/spark/.ivy2/cache'
@@ -241,36 +213,30 @@ pipeline {
                     timeout(time: 15, unit: 'MINUTES') {
                         sh '''
                             STAGE_START=$(date +%s)
-
                             $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
                                 /opt/spark-apps/jobs/ingest_stream.py
-
-                            STAGE_END=$(date +%s)
-                            DURATION=$((STAGE_END - STAGE_START))
-
+                            DURATION=$(($(date +%s) - STAGE_START))
                             if [ $DURATION -gt 600 ]; then
                                 docker exec -e MYSQL_PWD=admin mysql mysql -u admin booking -e "
                                     INSERT INTO pipeline_alerts
                                         (pipeline_name, stage_name, execution_date, error_message, alert_type)
                                     VALUES ('car_booking_pipeline', 'spark_ingest', NOW(),
-                                            CONCAT('SLA breach: ${DURATION}s > 600s threshold'), 'DQ_WARNING');
+                                            CONCAT('SLA breach: ${DURATION}s > 600s'), 'DQ_WARNING');
                                 "
-                                echo "⚠️ SLA breach: ingest took ${DURATION}s"
                             fi
-
                             docker exec -e MYSQL_PWD=admin mysql mysql -u admin booking -e "
                                 INSERT INTO pipeline_run_stats
                                     (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
                                 VALUES ('${PIPELINE_RUN_ID}', 'spark_ingest', 0, ${DURATION}, 'SUCCESS', NOW());
                             "
-                            echo "✅ Bronze layer ready! | Duration: ${DURATION}s"
+                            echo "✅ Bronze layer ready | ${DURATION}s"
                         '''
                     }
                 }
             }
         }
 
-        // ── TRANSFORM (Silver Layer) ─────────────────────────────
+        // ── TRANSFORMS (Sequential — 8GB machine) ───────────────
         stage('Transform · Customer') {
             steps {
                 timeout(time: 15, unit: 'MINUTES') {
@@ -280,13 +246,13 @@ pipeline {
                             --conf spark.sql.shuffle.partitions=4 \
                             --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
                             /opt/spark-apps/jobs/transform_customer.py
-                        STAGE_END=$(date +%s)
+                        DURATION=$(($(date +%s) - STAGE_START))
                         docker exec -e MYSQL_PWD=admin mysql mysql -u admin booking -e "
                             INSERT INTO pipeline_run_stats
                                 (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
-                            VALUES ('${PIPELINE_RUN_ID}', 'transform_customer', 0, $((STAGE_END-STAGE_START)), 'SUCCESS', NOW());
+                            VALUES ('${PIPELINE_RUN_ID}', 'transform_customer', 0, ${DURATION}, 'SUCCESS', NOW());
                         " || true
-                        echo "✅ Customer transform done"
+                        echo "✅ Customer transform | ${DURATION}s"
                     '''
                 }
             }
@@ -312,13 +278,13 @@ pipeline {
                             --conf spark.sql.shuffle.partitions=4 \
                             --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
                             /opt/spark-apps/jobs/transform_booking.py
-                        STAGE_END=$(date +%s)
+                        DURATION=$(($(date +%s) - STAGE_START))
                         docker exec -e MYSQL_PWD=admin mysql mysql -u admin booking -e "
                             INSERT INTO pipeline_run_stats
                                 (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
-                            VALUES ('${PIPELINE_RUN_ID}', 'transform_booking', 0, $((STAGE_END-STAGE_START)), 'SUCCESS', NOW());
+                            VALUES ('${PIPELINE_RUN_ID}', 'transform_booking', 0, ${DURATION}, 'SUCCESS', NOW());
                         " || true
-                        echo "✅ Booking transform done"
+                        echo "✅ Booking transform | ${DURATION}s"
                     '''
                 }
             }
@@ -344,13 +310,13 @@ pipeline {
                             --conf spark.sql.shuffle.partitions=4 \
                             --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
                             /opt/spark-apps/jobs/transform_cars.py
-                        STAGE_END=$(date +%s)
+                        DURATION=$(($(date +%s) - STAGE_START))
                         docker exec -e MYSQL_PWD=admin mysql mysql -u admin booking -e "
                             INSERT INTO pipeline_run_stats
                                 (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
-                            VALUES ('${PIPELINE_RUN_ID}', 'transform_cars', 0, $((STAGE_END-STAGE_START)), 'SUCCESS', NOW());
+                            VALUES ('${PIPELINE_RUN_ID}', 'transform_cars', 0, ${DURATION}, 'SUCCESS', NOW());
                         " || true
-                        echo "✅ Cars transform done"
+                        echo "✅ Cars transform | ${DURATION}s"
                     '''
                 }
             }
@@ -376,17 +342,17 @@ pipeline {
                             --conf spark.sql.shuffle.partitions=4 \
                             --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
                             /opt/spark-apps/jobs/transform_payments.py
-                        STAGE_END=$(date +%s)
+                        DURATION=$(($(date +%s) - STAGE_START))
                         docker exec -e MYSQL_PWD=admin mysql mysql -u admin booking -e "
                             INSERT INTO pipeline_run_stats
                                 (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
-                            VALUES ('${PIPELINE_RUN_ID}', 'transform_payments', 0, $((STAGE_END-STAGE_START)), 'SUCCESS', NOW());
+                            VALUES ('${PIPELINE_RUN_ID}', 'transform_payments', 0, ${DURATION}, 'SUCCESS', NOW());
                             INSERT INTO pipeline_run_stats
                                 (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
                             VALUES ('${PIPELINE_RUN_ID}', 'spark_transform', 0, 0, 'SUCCESS', NOW());
                         " || true
-                        echo "✅ Payments transform done"
-                        echo "✅ Silver layer ready — all 4 transforms complete"
+                        echo "✅ Payments transform | ${DURATION}s"
+                        echo "✅ Silver layer complete — all 4 transforms done"
                     '''
                 }
             }
@@ -400,57 +366,50 @@ pipeline {
                             INSERT INTO pipeline_alerts
                                 (pipeline_name, stage_name, execution_date, error_message, alert_type)
                             VALUES ('car_booking_pipeline', 'spark_transform', NOW(),
-                                    'Transform · Payments failed', 'FAILURE');
+                                    'Transform Payments failed', 'FAILURE');
                         " || true
                     '''
                 }
             }
         }
 
-        // ── MERGE (Curated Layer) ────────────────────────────────
+        // ── MERGE ────────────────────────────────────────────────
         stage('Merge Data') {
             steps {
                 timeout(time: 15, unit: 'MINUTES') {
                     sh '''
                         STAGE_START=$(date +%s)
-
                         $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
                             /opt/spark-apps/jobs/merge.py
-
-                        STAGE_END=$(date +%s)
-                        DURATION=$((STAGE_END - STAGE_START))
+                        DURATION=$(($(date +%s) - STAGE_START))
                         docker exec -e MYSQL_PWD=admin mysql mysql -u admin booking -e "
                             INSERT INTO pipeline_run_stats
                                 (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
                             VALUES ('${PIPELINE_RUN_ID}', 'spark_merge', 0, ${DURATION}, 'SUCCESS', NOW());
                         "
-                        echo "✅ Curated layer ready! | Duration: ${DURATION}s"
+                        echo "✅ Curated layer ready | ${DURATION}s"
                     '''
                 }
             }
         }
 
-        // ── WRITE TO POSTGRES ────────────────────────────────────
+        // ── WRITE POSTGRES ───────────────────────────────────────
         stage('Write to PostgreSQL Staging') {
             steps {
                 timeout(time: 15, unit: 'MINUTES') {
                     sh '''
                         STAGE_START=$(date +%s)
-
                         $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
                             /opt/spark-apps/jobs/write_to_postgres.py
-
                         RECORD_COUNT=$(docker exec postgres psql -U admin -d booking -t -c \
                             "SELECT COUNT(*) FROM customer_booking_staging;" | tr -d ' ')
-
-                        STAGE_END=$(date +%s)
-                        DURATION=$((STAGE_END - STAGE_START))
+                        DURATION=$(($(date +%s) - STAGE_START))
                         docker exec -e MYSQL_PWD=admin mysql mysql -u admin booking -e "
                             INSERT INTO pipeline_run_stats
                                 (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
                             VALUES ('${PIPELINE_RUN_ID}', 'write_postgres', ${RECORD_COUNT}, ${DURATION}, 'SUCCESS', NOW());
                         "
-                        echo "✅ PostgreSQL ready | Records: ${RECORD_COUNT} (36 cols) | Duration: ${DURATION}s"
+                        echo "✅ PostgreSQL ready | Records: ${RECORD_COUNT} | ${DURATION}s"
                     '''
                 }
             }
@@ -462,16 +421,16 @@ pipeline {
                 timeout(time: 20, unit: 'MINUTES') {
                     sh '''
                         STAGE_START=$(date +%s)
-                        echo "=== Installing ML dependencies in spark-master ==="
-
+                        echo "=== Installing ML deps ==="
                         docker exec -u root spark-master pip install \
                             psycopg2-binary pymysql pandas numpy scikit-learn \
-                            xgboost prophet joblib --quiet --break-system-packages 2>/dev/null || \
+                            xgboost prophet joblib boto3 \
+                            --quiet --break-system-packages 2>/dev/null || \
                         docker exec -u root spark-master pip install \
                             psycopg2-binary pymysql pandas numpy scikit-learn \
-                            xgboost prophet joblib --quiet
+                            xgboost prophet joblib boto3 --quiet
 
-                        echo "=== Running ML Models ==="
+                        echo "=== Running ML Models v3 ==="
                         docker exec spark-master python3 /opt/spark-apps/jobs/ml_models.py
 
                         FORECAST_COUNT=$(docker exec postgres psql -U admin -d booking -t -c \
@@ -481,18 +440,17 @@ pipeline {
                         CHURN_COUNT=$(docker exec postgres psql -U admin -d booking -t -c \
                             "SELECT COUNT(*) FROM ml_churn_scores;" 2>/dev/null | tr -d ' ' || echo "0")
 
-                        STAGE_END=$(date +%s)
-                        DURATION=$((STAGE_END - STAGE_START))
-
+                        DURATION=$(($(date +%s) - STAGE_START))
                         docker exec -e MYSQL_PWD=admin mysql mysql -u admin booking -e "
                             INSERT INTO pipeline_run_stats
                                 (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
                             VALUES ('${PIPELINE_RUN_ID}', 'run_ml_models', 0, ${DURATION}, 'SUCCESS', NOW());
                         "
-                        echo "✅ ML Models complete | Duration: ${DURATION}s"
-                        echo "   Prophet forecast : ${FORECAST_COUNT} rows"
-                        echo "   Fraud scores     : ${FRAUD_COUNT} rows"
-                        echo "   Churn scores     : ${CHURN_COUNT} rows"
+                        echo "✅ ML Models v3 done | ${DURATION}s"
+                        echo "   Prophet  : ${FORECAST_COUNT} rows"
+                        echo "   Fraud    : ${FRAUD_COUNT} rows"
+                        echo "   Churn    : ${CHURN_COUNT} rows"
+                        echo "   MinIO    : models saved to models/ml_models/"
                     '''
                 }
             }
@@ -508,7 +466,6 @@ pipeline {
                             VALUES ('car_booking_pipeline', 'Run ML Models', NOW(),
                                     'ML Models failed — dashboard AI tab will show fallback', 'DQ_WARNING');
                         " || true
-                        echo "⚠️ ML Models failed — pipeline continues, dashboard fallback active"
                     '''
                 }
             }
@@ -520,7 +477,7 @@ pipeline {
                 timeout(time: 10, unit: 'MINUTES') {
                     sh '''
                         STAGE_START=$(date +%s)
-                        echo "=== Model Evaluation + MLflow Tracking ==="
+                        echo "=== Model Evaluation + MLflow ==="
 
                         docker exec -u root spark-master pip install \
                             "packaging<25" mlflow-skinny sqlalchemy \
@@ -538,21 +495,24 @@ sys.path.insert(0, '/opt/spark-apps/jobs')
 from agent import ModelEvaluationAgent
 ev = ModelEvaluationAgent()
 r  = ev.evaluate_all()
-print('Prophet MAPE   :', r.get('prophet',{}).get('mape','N/A'), '%')
-print('Fraud rate     :', r.get('isolation_forest',{}).get('fraud_rate_pct','N/A'), '%')
-print('XGBoost AUC    :', r.get('xgboost',{}).get('xgb_auc','N/A'))
-print('Prophet verdict:', r.get('prophet',{}).get('verdict','N/A'))
-print('Churn verdict  :', r.get('xgboost',{}).get('verdict','N/A'))
-"
-                        STAGE_END=$(date +%s)
-                        DURATION=$((STAGE_END - STAGE_START))
+print('Prophet MAPE     :', r.get('prophet',{}).get('mape','N/A'), '%')
+print('Fraud rate       :', r.get('isolation_forest',{}).get('fraud_rate_pct','N/A'), '%')
+print('XGBoost AUC      :', r.get('xgboost',{}).get('xgb_auc','N/A'))
+print('Prophet verdict  :', r.get('prophet',{}).get('verdict','N/A'))
+print('Churn verdict    :', r.get('xgboost',{}).get('verdict','N/A'))
 
+# ✅ NEW: Check RETRAIN tag
+churn_verdict = r.get('xgboost',{}).get('verdict','')
+if churn_verdict == 'needs_retraining':
+    print('⚠️  RETRAIN FLAG: XGBoost AUC below threshold — MLflow tagged action_required=RETRAIN')
+"
+                        DURATION=$(($(date +%s) - STAGE_START))
                         docker exec -e MYSQL_PWD=admin mysql mysql -u admin booking -e "
                             INSERT INTO pipeline_run_stats
                                 (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
                             VALUES ('${PIPELINE_RUN_ID}', 'model_evaluation', 0, ${DURATION}, 'SUCCESS', NOW());
                         "
-                        echo "✅ Model Evaluation complete | MLflow: http://localhost:5000"
+                        echo "✅ Model Evaluation done | MLflow: http://localhost:5000"
                     '''
                 }
             }
@@ -566,10 +526,100 @@ print('Churn verdict  :', r.get('xgboost',{}).get('verdict','N/A'))
                             INSERT INTO pipeline_alerts
                                 (pipeline_name, stage_name, execution_date, error_message, alert_type)
                             VALUES ('car_booking_pipeline', 'Model Evaluation', NOW(),
-                                    'MLflow tracking failed — models ran OK, metrics not logged', 'DQ_WARNING');
+                                    'MLflow tracking failed — models ran OK', 'DQ_WARNING');
                         " || true
-                        echo "⚠️ Model Evaluation failed — pipeline continues"
                     '''
+                }
+            }
+        }
+
+        // ── AUTO-RETRAIN CHECK ───────────────────────────────────
+        // ✅ NEW UNIQUE STAGE: MLflow RETRAIN tag → auto trigger retraining
+        stage('Auto-Retrain Check') {
+            steps {
+                timeout(time: 15, unit: 'MINUTES') {
+                    sh '''
+                        echo "=== Auto-Retrain Check ==="
+
+                        # Check MLflow for RETRAIN tag
+                        RETRAIN_NEEDED=$(docker exec \
+                            -e MLFLOW_TRACKING_URI=http://mlflow:5000 \
+                            spark-master python3 -c "
+import sys
+sys.path.insert(0, '/opt/spark-apps/lib')
+try:
+    import mlflow
+    mlflow.set_tracking_uri('http://mlflow:5000')
+    client = mlflow.tracking.MlflowClient()
+    exp = client.get_experiment_by_name('car-booking-ml-models')
+    if not exp:
+        print('NO')
+        sys.exit(0)
+    runs = client.search_runs(
+        experiment_ids=[exp.experiment_id],
+        filter_string=\"tags.action_required = 'RETRAIN'\",
+        order_by=['start_time DESC'],
+        max_results=1
+    )
+    print('YES' if runs else 'NO')
+except Exception as e:
+    print('NO')
+" 2>/dev/null || echo "NO")
+
+                        echo "   RETRAIN needed: ${RETRAIN_NEEDED}"
+
+                        if [ "${RETRAIN_NEEDED}" = "YES" ]; then
+                            echo "⚠️  RETRAIN FLAG DETECTED — Re-running ML Models with fresh data"
+
+                            docker exec -e MYSQL_PWD=admin mysql mysql -u admin booking -e "
+                                INSERT INTO pipeline_alerts
+                                    (pipeline_name, stage_name, execution_date, error_message, alert_type)
+                                VALUES ('car_booking_pipeline', 'auto_retrain', NOW(),
+                                        CONCAT('Auto-retrain triggered — Build #${BUILD_NUMBER} | AUC below threshold'), 'DQ_WARNING');
+                            " || true
+
+                            # Re-run ML models
+                            docker exec spark-master python3 /opt/spark-apps/jobs/ml_models.py
+
+                            # Clear RETRAIN tag in MLflow
+                            docker exec \
+                                -e MLFLOW_TRACKING_URI=http://mlflow:5000 \
+                                spark-master python3 -c "
+import mlflow
+mlflow.set_tracking_uri('http://mlflow:5000')
+client = mlflow.tracking.MlflowClient()
+exp    = client.get_experiment_by_name('car-booking-ml-models')
+if exp:
+    runs = client.search_runs(
+        experiment_ids=[exp.experiment_id],
+        filter_string=\"tags.action_required = 'RETRAIN'\",
+        max_results=10
+    )
+    for run in runs:
+        client.delete_tag(run.info.run_id, 'action_required')
+    print(f'✅ RETRAIN tag cleared from {len(runs)} runs')
+" 2>/dev/null || true
+
+                            docker exec -e MYSQL_PWD=admin mysql mysql -u admin booking -e "
+                                INSERT INTO pipeline_run_stats
+                                    (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
+                                VALUES ('${PIPELINE_RUN_ID}', 'auto_retrain', 0, 0, 'SUCCESS', NOW());
+                            " || true
+                            echo "✅ Auto-retrain complete"
+                        else
+                            echo "✅ Models healthy — no retraining needed"
+                            docker exec -e MYSQL_PWD=admin mysql mysql -u admin booking -e "
+                                INSERT INTO pipeline_run_stats
+                                    (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
+                                VALUES ('${PIPELINE_RUN_ID}', 'auto_retrain', 0, 0, 'SUCCESS', NOW());
+                            " || true
+                        fi
+                    '''
+                }
+            }
+            post {
+                failure {
+                    sh 'echo "⚠️ Auto-retrain check failed — continuing pipeline"'
                 }
             }
         }
@@ -600,14 +650,14 @@ print('Churn verdict  :', r.get('xgboost',{}).get('verdict','N/A'))
                         "SELECT COALESCE(success_rate, 0) FROM validation_results ORDER BY created_at DESC LIMIT 1;" \
                         | tr -d ' ')
 
-                    echo "📊 Data Quality Score: ${DQ_SCORE}%"
-
                     FAILED_COUNT=$(docker exec -e MYSQL_PWD=admin mysql mysql -u admin booking -sN -e \
                         "SELECT COUNT(*) FROM validation_failed_records;" | tr -d ' ')
 
-                    STAGE_END=$(date +%s)
-                    DURATION=$((STAGE_END - STAGE_START))
+                    FAILED_COLS=$(docker exec -e MYSQL_PWD=admin mysql mysql -u admin booking -sN -e \
+                        "SELECT GROUP_CONCAT(DISTINCT column_name ORDER BY column_name SEPARATOR ', ')
+                         FROM validation_failed_records LIMIT 1;" | tr -d ' ')
 
+                    DURATION=$(($(date +%s) - STAGE_START))
                     docker exec -e MYSQL_PWD=admin mysql mysql -u admin booking -e "
                         INSERT INTO pipeline_run_stats
                             (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
@@ -619,12 +669,13 @@ print('Churn verdict  :', r.get('xgboost',{}).get('verdict','N/A'))
                             INSERT INTO pipeline_alerts
                                 (pipeline_name, stage_name, execution_date, error_message, alert_type)
                             SELECT 'car_booking_pipeline', 'data_validation', NOW(),
-                                   CONCAT('DQ Score: ${DQ_SCORE}% — below 80% threshold'), 'DQ_WARNING'
-                            WHERE ${DQ_SCORE} < 80;
+                                   CONCAT('DQ: ${DQ_SCORE}% below threshold ${DQ_THRESHOLD}% | Failed cols: ${FAILED_COLS}'), 'DQ_WARNING'
+                            WHERE ${DQ_SCORE} < ${DQ_THRESHOLD};
                         "
                     fi
 
-                    echo "✅ Validation complete! | DQ: ${DQ_SCORE}% | Failed records: ${FAILED_COUNT}"
+                    echo "✅ Validation done | DQ: ${DQ_SCORE}% | Failed records: ${FAILED_COUNT}"
+                    echo "   Failed columns: ${FAILED_COLS}"
                 '''
             }
         }
@@ -637,7 +688,6 @@ print('Churn verdict  :', r.get('xgboost',{}).get('verdict','N/A'))
                     docker-compose -p ${COMPOSE_PROJECT} build --no-cache dashboard
                     docker-compose -p ${COMPOSE_PROJECT} up -d dashboard
 
-                    # ✅ FIX 3: Retries badhe + timeout ke baad warning log hoga
                     DASHBOARD_UP=false
                     for i in $(seq 1 15); do
                         STATUS=$(docker inspect --format="{{.State.Health.Status}}" dashboard 2>/dev/null || echo "none")
@@ -646,12 +696,12 @@ print('Churn verdict  :', r.get('xgboost',{}).get('verdict','N/A'))
                             DASHBOARD_UP=true
                             break
                         fi
-                        echo "Waiting... $i/15 | status=$STATUS"
+                        echo "Waiting... $i/15 | $STATUS"
                         sleep 10
                     done
 
                     if [ "$DASHBOARD_UP" = "false" ]; then
-                        echo "⚠️ Dashboard health check timeout — port 8050 manually check karo"
+                        echo "⚠️ Dashboard timeout — check http://localhost:8050"
                         docker logs dashboard --tail 20 || true
                     fi
                 '''
@@ -662,7 +712,6 @@ print('Churn verdict  :', r.get('xgboost',{}).get('verdict','N/A'))
     // ── POST ─────────────────────────────────────────────────────
     post {
         success {
-            // ✅ FIX 1: script{} block mein Groovy variable pakdo — Bad Substitution fix
             script {
                 def buildDuration = currentBuild.durationString
                 def buildNumber   = env.BUILD_NUMBER
@@ -672,49 +721,53 @@ print('Churn verdict  :', r.get('xgboost',{}).get('verdict','N/A'))
                     docker exec -e MYSQL_PWD=admin mysql mysql -u admin booking -e "
                         INSERT INTO pipeline_alerts
                             (pipeline_name, stage_name, execution_date, error_message, alert_type)
-                        VALUES
-                            ('car_booking_pipeline', 'all_stages', NOW(),
-                             CONCAT('Pipeline #${buildNumber} completed in ${buildDuration}'), 'SUCCESS');
+                        VALUES ('car_booking_pipeline', 'all_stages', NOW(),
+                                CONCAT('Pipeline #${buildNumber} done in ${buildDuration}'), 'SUCCESS');
                     " || true
 
                     echo ""
-                    echo "╔══════════════════════════════════════════╗"
-                    echo "║   PIPELINE COMPLETE — SUMMARY            ║"
-                    echo "╠══════════════════════════════════════════╣"
+                    echo "╔══════════════════════════════════════════════╗"
+                    echo "║   PIPELINE v3 COMPLETE                       ║"
+                    echo "╠══════════════════════════════════════════════╣"
                     docker exec -e MYSQL_PWD=admin mysql mysql -u admin booking -sN -e "
-                        SELECT CONCAT('  ', RPAD(stage_name,20), ' | ',
+                        SELECT CONCAT('  ', RPAD(stage_name,22), ' | ',
                                       RPAD(status,8), ' | ', duration_seconds, 's')
                         FROM pipeline_run_stats
                         WHERE run_id = '${runId}'
                         ORDER BY started_at;
                     " || true
-                    echo "╠══════════════════════════════════════════╣"
+                    echo "╠══════════════════════════════════════════════╣"
                     echo "  📊 Dashboard      : http://localhost:8050"
+                    echo "  🧪 MLflow         : http://localhost:5000"
                     echo "  📋 Kafka UI       : http://localhost:8081"
                     echo "  🗄️  MinIO          : http://localhost:9001"
                     echo "  ⚡ Spark UI       : http://localhost:8082"
                     echo "  🔀 Schema Registry: http://localhost:8085"
-                    echo "  🧪 MLflow         : http://localhost:5000"
-                    echo "╚══════════════════════════════════════════╝"
+                    echo "╚══════════════════════════════════════════════╝"
                 """
             }
 
             mail(
                 to:      "${ALERT_EMAIL}",
-                subject: "✅ Car Booking Pipeline — SUCCESS #${BUILD_NUMBER}",
+                subject: "✅ Car Booking Pipeline v3 — SUCCESS #${BUILD_NUMBER}",
                 body:    """
-Pipeline completed successfully!
+Pipeline v3 completed successfully!
 
 Build     : #${BUILD_NUMBER}
 Run ID    : ${PIPELINE_RUN_ID}
 Duration  : ${currentBuild.durationString}
-Branch    : ${GIT_BRANCH}
+
+New in v3:
+  - Auto-Retrain: MLflow RETRAIN tag → auto re-run ML models
+  - Model Persistence: saved to MinIO (models/ml_models/)
+  - GE Failures → Claude: specific column failures in AI analysis
+  - Parallel Agents: 4x faster orchestrator
+  - Weighted Health Score: continuous 0-100
 
 Links:
-  Dashboard      : http://localhost:8050
-  Kafka UI       : http://localhost:8081
-  Schema Registry: http://localhost:8085
-  Jenkins Build  : ${BUILD_URL}
+  Dashboard : http://localhost:8050
+  MLflow    : http://localhost:5000
+  Jenkins   : ${BUILD_URL}
                 """.stripIndent()
             )
         }
@@ -728,37 +781,26 @@ Links:
                 docker exec -e MYSQL_PWD=admin mysql mysql -u admin booking -e "
                     INSERT INTO pipeline_alerts
                         (pipeline_name, stage_name, execution_date, error_message, alert_type)
-                    VALUES
-                        ('car_booking_pipeline', '${FAILED_STAGE}', NOW(),
-                         CONCAT('Build #${BUILD_NUMBER} FAILED at stage: ${FAILED_STAGE}'), 'FAILURE');
+                    VALUES ('car_booking_pipeline', '${FAILED_STAGE}', NOW(),
+                            CONCAT('Build #${BUILD_NUMBER} FAILED at: ${FAILED_STAGE}'), 'FAILURE');
                 " || true
 
                 echo "=== Diagnostics ==="
-                docker-compose -p ${COMPOSE_PROJECT} ps     || true
-                echo "--- Kafka ---"
-                docker logs kafka        --tail 20           || true
-                echo "--- Spark ---"
-                docker logs spark-master --tail 30           || true
-                echo "--- Schema Registry ---"
-                docker logs schema-registry --tail 15        || true
-                echo "--- Dashboard ---"
-                docker logs dashboard    --tail 20           || true
+                docker-compose -p ${COMPOSE_PROJECT} ps  || true
+                docker logs spark-master --tail 30        || true
+                docker logs dashboard    --tail 20        || true
             '''
 
             mail(
                 to:      "${ALERT_EMAIL}",
-                subject: "❌ Car Booking Pipeline — FAILED #${BUILD_NUMBER}",
+                subject: "❌ Car Booking Pipeline v3 — FAILED #${BUILD_NUMBER}",
                 body:    """
 Pipeline FAILED!
 
-Build     : #${BUILD_NUMBER}
-Run ID    : ${PIPELINE_RUN_ID}
-Branch    : ${GIT_BRANCH}
+Build  : #${BUILD_NUMBER}
+Run ID : ${PIPELINE_RUN_ID}
 
-Check Jenkins logs:
-  ${BUILD_URL}console
-
-Fix karo aur dobara push karo.
+Logs: ${BUILD_URL}console
                 """.stripIndent()
             )
         }

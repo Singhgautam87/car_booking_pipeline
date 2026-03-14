@@ -21,17 +21,50 @@ from sqlalchemy import create_engine
 # ================================================================
 # DB CONNECTIONS
 # ================================================================
+# ✅ PRODUCTION FIX: Connection pools + 5-min tab cache
+import time as _time
+from sqlalchemy.pool import QueuePool
+
+_TAB_CACHE = {}
+_TAB_CACHE_TTL = 300  # 5 minutes
+
 def get_pg_engine():
     host = os.getenv("POSTGRES_HOST", "postgres")
     return create_engine(
         f"postgresql+psycopg2://admin:admin@{host}:5432/booking",
-        pool_pre_ping=True)
+        pool_pre_ping=True,
+        pool_size=3,          # max 3 persistent connections
+        max_overflow=2,       # 2 extra allowed under burst
+        pool_timeout=10,      # wait max 10s for connection
+        pool_recycle=300,     # recycle connections every 5min
+    )
 
 def get_mysql_engine():
     host = os.getenv("MYSQL_HOST", "mysql")
     return create_engine(
         f"mysql+mysqlconnector://admin:admin@{host}:3306/booking",
-        pool_pre_ping=True)
+        pool_pre_ping=True,
+        pool_size=2,
+        max_overflow=1,
+        pool_timeout=10,
+        pool_recycle=300,
+    )
+
+# Singleton engines — reused across callbacks
+_PG_ENGINE    = None
+_MYSQL_ENGINE = None
+
+def pg_engine():
+    global _PG_ENGINE
+    if _PG_ENGINE is None:
+        _PG_ENGINE = get_pg_engine()
+    return _PG_ENGINE
+
+def mysql_engine():
+    global _MYSQL_ENGINE
+    if _MYSQL_ENGINE is None:
+        _MYSQL_ENGINE = get_mysql_engine()
+    return _MYSQL_ENGINE
 
 def get_booking_data():
     """
@@ -39,7 +72,7 @@ def get_booking_data():
     Full data fetched per-tab only when needed (lazy loading)
     """
     try:
-        engine = get_pg_engine()
+        engine = pg_engine()  # ✅ singleton — no new connection
         kpi = pd.read_sql("""
             SELECT COUNT(*) AS total_bookings,
                    COUNT(DISTINCT customer_id) AS total_customers,
@@ -87,7 +120,7 @@ def get_booking_data():
             FROM customer_booking_staging
             GROUP BY TO_CHAR(booking_date, 'Mon'), TRIM(TO_CHAR(booking_date, 'Day'))
         """, engine)
-        engine.dispose()
+        # No dispose() — singleton engine reused
         return {
             "kpi": kpi.to_dict("records"),
             "daily": daily.to_dict("records"),
@@ -102,55 +135,68 @@ def get_booking_data():
         return {}
 
 def get_tab_data(tab: str) -> pd.DataFrame:
-    """Lazy load — full data only for active tab"""
+    """
+    Lazy load — full data only for active tab.
+    ✅ PRODUCTION FIX: 5-min cache — no repeated DB calls on filter/tab switch
+    """
+    global _TAB_CACHE
+    now = _time.time()
+
+    # Cache hit — return cached data
+    if tab in _TAB_CACHE and (now - _TAB_CACHE[tab]["ts"]) < _TAB_CACHE_TTL:
+        age = int(now - _TAB_CACHE[tab]["ts"])
+        print(f"[TAB CACHE HIT] {tab} — age: {age}s")
+        return _TAB_CACHE[tab]["data"]
+
+    # Cache miss — fetch from DB
+    queries = {
+        "analytics":    """SELECT booking_date, payment_amount, booking_id,
+                                  amount_tier, model, price_per_day,
+                                  insurance_coverage, insurer_type,
+                                  loyalty_tier, payment_method
+                           FROM customer_booking_staging""",
+        "routes":       """SELECT route, trip_type, car_segment, booking_id,
+                                  payment_amount, pickup_hour, pickup_slot,
+                                  booking_date, amount_tier
+                           FROM customer_booking_staging""",
+        "observability":"""SELECT booking_date, booking_id, customer_id,
+                                  pickup_hour, payment_amount
+                           FROM customer_booking_staging""",
+    }
+    if tab not in queries:
+        return pd.DataFrame()
     try:
-        engine = get_pg_engine()
-        queries = {
-            "analytics": "SELECT booking_date, payment_amount, booking_id, amount_tier, model, price_per_day, insurance_coverage, insurer_type, loyalty_tier, payment_method FROM customer_booking_staging",
-            "routes": "SELECT route, trip_type, car_segment, booking_id, payment_amount, pickup_hour, pickup_slot, booking_date, amount_tier FROM customer_booking_staging",
-            "observability": "SELECT booking_date, booking_id, customer_id, pickup_hour, payment_amount FROM customer_booking_staging",
-        }
-        if tab not in queries:
-            engine.dispose()
-            return pd.DataFrame()
-        df = pd.read_sql(queries[tab], engine)
-        engine.dispose()
+        df = pd.read_sql(queries[tab], pg_engine())
+        _TAB_CACHE[tab] = {"data": df, "ts": now}
+        print(f"[TAB CACHE MISS] {tab} — fetched {len(df):,} rows, cached for {_TAB_CACHE_TTL}s")
         return df
     except Exception as e:
         print(f"[TAB DATA ERROR] {tab}: {e}")
         return pd.DataFrame()
 
 def get_monitoring_data():
-    host = os.getenv("MYSQL_HOST", "mysql")
     try:
-        engine = create_engine(
-            f"mysql+mysqlconnector://admin:admin@{host}:3306/booking",
-            pool_pre_ping=True)
+        engine = mysql_engine()  # ✅ singleton pool
         val_df    = pd.read_sql("SELECT * FROM validation_results ORDER BY created_at DESC", engine)
         exp_df    = pd.read_sql("SELECT * FROM validation_expectation_details", engine)
         fail_df   = pd.read_sql("SELECT * FROM validation_failed_records LIMIT 500", engine)
         sla_df    = pd.read_sql("SELECT * FROM pipeline_run_stats ORDER BY started_at DESC", engine)
         alerts_df = pd.read_sql("SELECT * FROM pipeline_alerts ORDER BY created_at DESC LIMIT 50", engine)
         schema_df = pd.read_sql("SELECT * FROM schema_registry_log ORDER BY registered_at DESC", engine)
-        engine.dispose()
         return val_df, exp_df, fail_df, sla_df, alerts_df, schema_df
     except Exception as e:
         print(f"[MYSQL ERROR] {e}")
         return (pd.DataFrame(),)*6
 
 def get_ml_data():
-    host = os.getenv("POSTGRES_HOST", "postgres")
     try:
-        engine = create_engine(
-            f"postgresql+psycopg2://admin:admin@{host}:5432/booking",
-            pool_pre_ping=True)
+        engine = pg_engine()  # ✅ singleton pool
         forecast_df = pd.read_sql("SELECT * FROM ml_demand_forecast ORDER BY forecast_date", engine) \
                       if _table_exists(engine, "ml_demand_forecast") else pd.DataFrame()
         fraud_df    = pd.read_sql("SELECT * FROM ml_fraud_scores ORDER BY fraud_risk_score DESC", engine) \
                       if _table_exists(engine, "ml_fraud_scores") else pd.DataFrame()
         churn_df    = pd.read_sql("SELECT * FROM ml_churn_scores ORDER BY churn_probability DESC", engine) \
                       if _table_exists(engine, "ml_churn_scores") else pd.DataFrame()
-        engine.dispose()
         return forecast_df, fraud_df, churn_df
     except Exception as e:
         print(f"[ML DATA ERROR] {e}")
@@ -495,11 +541,9 @@ def update_filters(booking_data):
     pay_opts = [{"label":v,"value":v} for v in sorted(payments_df["payment_method"].dropna().unique())]                if not payments_df.empty and "payment_method" in payments_df.columns else []
     seg_opts = [{"label":v,"value":v} for v in sorted(segments_df["car_segment"].dropna().unique())]                if not segments_df.empty and "car_segment" in segments_df.columns else []
 
-    # Trip types — fetch quickly
+    # Trip types — fetch via singleton
     try:
-        engine = get_pg_engine()
-        trips = pd.read_sql("SELECT DISTINCT trip_type FROM customer_booking_staging WHERE trip_type IS NOT NULL", engine)
-        engine.dispose()
+        trips = pd.read_sql("SELECT DISTINCT trip_type FROM customer_booking_staging WHERE trip_type IS NOT NULL", pg_engine())
         trip_opts = [{"label":v,"value":v} for v in sorted(trips["trip_type"].tolist())]
     except Exception:
         trip_opts = []
@@ -1752,9 +1796,7 @@ def _render_chat(history):
 def render_debug(bk, fail):
     # Debug tab fetches full schema info
     try:
-        engine = get_pg_engine()
-        df = pd.read_sql("SELECT * FROM customer_booking_staging LIMIT 1000", engine)
-        engine.dispose()
+        df = pd.read_sql("SELECT * FROM customer_booking_staging LIMIT 1000", pg_engine())
     except Exception as e:
         df = pd.DataFrame()
         print(f"[DEBUG ERROR] {e}")

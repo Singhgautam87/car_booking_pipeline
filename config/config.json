@@ -67,5 +67,14 @@
     "kafka_wait_seconds": 60,
     "schema_registry_retries": 12,
     "db_ready_retries": 30
+  },
+  "ml": {
+    "churn_threshold_days": 60,
+    "churn_retrain_auc": 0.7,
+    "fraud_alert_rate_pct": 30,
+    "fraud_monitor_rate_pct": 15,
+    "prophet_retrain_mape": 30,
+    "models_bucket": "models",
+    "models_prefix": "ml_models"
   }
 }

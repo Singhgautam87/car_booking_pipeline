@@ -33,7 +33,6 @@ services:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_HEAP_OPTS: "-Xmx128M -Xms128M"
     healthcheck:
-      # ✅ FIX: nc nahi hai image mein — /dev/tcp se ruok/imok use karo
       test: ["CMD-SHELL", "echo ruok | timeout 2 bash -c 'cat > /dev/tcp/localhost/2181' && echo imok"]
       interval: 10s
       timeout: 10s
@@ -51,7 +50,6 @@ services:
     memswap_limit: 512m
     depends_on:
       zookeeper:
-        # ✅ FIX 2: service_started → service_healthy
         condition: service_healthy
     ports:
       - "9092:9092"
@@ -121,6 +119,8 @@ services:
       - car-booking-network
 
   # ── SPARK ──────────────────────────────────────────────────────
+  # mem_limit 2g — sequential transforms mein ek waqt 1 job
+  # 512m driver + 256m executor + overhead = ~1g comfortable fit
   spark:
     image: apache/spark:3.4.2
     container_name: spark-master
@@ -134,6 +134,12 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - LANGSMITH_API_KEY=${LANGSMITH_API_KEY:-}
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - POSTGRES_HOST=postgres
+      - MYSQL_HOST=mysql
     volumes:
       - ./reports:/opt/reports
       - ./config:/opt/config
@@ -231,6 +237,10 @@ services:
     restart: "no"
     mem_limit: 512m
     memswap_limit: 512m
+    environment:
+      - POSTGRES_HOST=postgres
+      - MYSQL_HOST=mysql
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
     volumes:
       - ./great_expectations:/ge
       - ./reports:/opt/reports
@@ -251,6 +261,7 @@ services:
       - car-booking-network
 
   # ── MLFLOW ─────────────────────────────────────────────────────
+  # Spark khatam hone ke baad chalta hai — memory free hoti hai
   mlflow:
     image: ghcr.io/mlflow/mlflow:latest
     container_name: mlflow
@@ -268,7 +279,6 @@ services:
     volumes:
       - mlflow_data:/mlflow
     healthcheck:
-      # ✅ FIX 3: /health exist nahi karta — sahi endpoint use karo
       test: ["CMD", "curl", "-f", "http://localhost:5000/api/2.0/mlflow/experiments/list"]
       interval: 15s
       timeout: 10s
@@ -278,12 +288,14 @@ services:
       - car-booking-network
 
   # ── DASHBOARD ──────────────────────────────────────────────────
+  # Claude API = network call, no local compute
+  # 512m dashboard mein comfortably fit ✅
   dashboard:
     build:
       context: ./realtime_dashboard
       dockerfile: Dockerfile
     container_name: dashboard
-    restart: "no"
+    restart: unless-stopped
     mem_limit: 512m
     memswap_limit: 512m
     ports:

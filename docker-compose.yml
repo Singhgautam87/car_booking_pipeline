@@ -141,6 +141,7 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - LANGSMITH_API_KEY=${LANGSMITH_API_KEY:-}
       - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - FASTAPI_URL=http://fastapi:8000
       - POSTGRES_HOST=postgres
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
@@ -325,6 +326,40 @@ services:
     networks:
       - car-booking-network
 
+  # ── FASTAPI ────────────────────────────────────────────────────
+  fastapi:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    container_name: fastapi
+    restart: unless-stopped
+    mem_limit: 256m
+    memswap_limit: 256m
+    ports:
+      - "8000:8000"
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - MYSQL_HOST=mysql
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+      - MYSQL_DATABASE=${MYSQL_DATABASE}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    networks:
+      - car-booking-network
+
   # ── DASHBOARD ──────────────────────────────────────────────────
   # Claude API = network call, no local compute
   # 512m dashboard mein comfortably fit ✅
@@ -354,6 +389,8 @@ services:
       postgres:
         condition: service_healthy
       mysql:
+        condition: service_healthy
+      fastapi:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8050"]

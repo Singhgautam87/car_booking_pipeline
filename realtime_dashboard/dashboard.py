@@ -19,6 +19,21 @@ import numpy as np
 from sqlalchemy import create_engine
 
 # ================================================================
+# FASTAPI — production pattern: dashboard → API → DB
+# ================================================================
+FASTAPI_URL = os.getenv("FASTAPI_URL", "http://fastapi:8000")
+
+def api_get(endpoint: str) -> list:
+    """FastAPI se data fetch karo — direct DB fallback"""
+    try:
+        resp = requests.get(f"{FASTAPI_URL}{endpoint}", timeout=5)
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception as e:
+        print(f"[API FALLBACK] {endpoint}: {e}")
+    return []
+
+# ================================================================
 # DB CONNECTIONS
 # ================================================================
 # ✅ PRODUCTION FIX: Connection pools + 5-min tab cache
@@ -68,9 +83,29 @@ def mysql_engine():
 
 def get_booking_data():
     """
-    FIX: Aggregated summaries only — not SELECT * 30k rows
-    Full data fetched per-tab only when needed (lazy loading)
+    Production pattern: FastAPI → DB (not direct DB)
+    Fallback to direct DB if FastAPI unavailable
     """
+    # Try FastAPI first
+    summary  = api_get("/api/bookings/summary")
+    daily    = api_get("/api/bookings/daily")
+    segments = api_get("/api/bookings/segments")
+    payments = api_get("/api/bookings/payments")
+    loyalty  = api_get("/api/bookings/loyalty")
+
+    if summary and daily:
+        # FastAPI available — use API data
+        return {
+            "kpi":      summary,
+            "daily":    daily,
+            "segments": segments,
+            "payments": payments,
+            "loyalty":  loyalty,
+            "top_cars": api_get("/api/bookings/segments"),
+            "heatmap":  [],
+        }
+
+    # Fallback to direct DB
     try:
         engine = pg_engine()  # ✅ singleton — no new connection
         kpi = pd.read_sql("""
@@ -175,6 +210,26 @@ def get_tab_data(tab: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 def get_monitoring_data():
+    # Try FastAPI first
+    try:
+        val_api    = api_get("/api/quality/results")
+        exp_api    = api_get("/api/quality/failed/summary")
+        fail_api   = api_get("/api/quality/failed")
+        sla_api    = api_get("/api/pipeline/stats")
+        alerts_api = api_get("/api/pipeline/alerts")
+
+        if val_api and sla_api:
+            val_df    = pd.DataFrame(val_api)
+            exp_df    = pd.DataFrame(exp_api)
+            fail_df   = pd.DataFrame(fail_api)
+            sla_df    = pd.DataFrame(sla_api)
+            alerts_df = pd.DataFrame(alerts_api)
+            schema_df = pd.DataFrame()
+            return val_df, exp_df, fail_df, sla_df, alerts_df, schema_df
+    except Exception as e:
+        print(f"[API monitoring fallback] {e}")
+
+    # Fallback to direct DB
     try:
         engine = mysql_engine()  # ✅ singleton pool
         val_df    = pd.read_sql("SELECT * FROM validation_results ORDER BY created_at DESC", engine)
@@ -1666,8 +1721,8 @@ def handle_ai_chat(ask_clicks, quick_clicks, user_input, bk, chat_history):
     if not question:
         return _render_chat(chat_history), "", chat_history
 
-    # Get answer
-    answer = _get_ai_answer(question, bk)
+    # Get answer — pass history for conversation memory
+    answer = _get_ai_answer(question, bk, chat_history)
     chat_history = chat_history + [{"q": question, "a": answer}]
     if len(chat_history) > 10:
         chat_history = chat_history[-10:]
@@ -1675,22 +1730,20 @@ def handle_ai_chat(ask_clicks, quick_clicks, user_input, bk, chat_history):
     return _render_chat(chat_history), "", chat_history
 
 
-def _get_ai_answer(question: str, bk) -> str:
+def _get_ai_answer(question: str, bk, chat_history: list = None) -> str:
     """
-    Direct DB se data fetch karta hai — bk dict se nahi
-    (bk ab aggregated dict hai, full df nahi)
+    Direct DB + conversation memory — context aware answers
+    chat_history: list of {"q": ..., "a": ...} dicts
     """
     ANTHROPIC_KEY = os.getenv("ANTHROPIC_API_KEY","")
 
-    # FIX: bk is now a dict — fetch summary from it
     kpi = bk.get("kpi", [{}])[0] if isinstance(bk, dict) and bk.get("kpi") else {}
     total_records = int(kpi.get("total_bookings", 0))
 
     if total_records == 0:
         return "[ no data in staging table — run pipeline first ]"
 
-    # Use a lightweight df for fallback queries
-    df = pd.DataFrame()  # not used for fallback — direct SQL below
+    df = pd.DataFrame()
 
     # Use Orchestrator if API key available
     if ANTHROPIC_KEY:
@@ -1713,26 +1766,33 @@ def _get_ai_answer(question: str, bk) -> str:
         # Direct Claude fallback (agent.py not importable from dashboard)
         try:
             from anthropic import Anthropic
-            client  = Anthropic(api_key=ANTHROPIC_KEY)
-            context = df.describe(include="all").to_string() if not df.empty else "no data"
-            sample  = df.head(3).to_string() if not df.empty else "no data"
-            msg = client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=400,
-                messages=[{"role":"user","content":f"""
-You are a data analyst for a car booking pipeline.
-Table: customer_booking_staging (36 columns)
+            client = Anthropic(api_key=ANTHROPIC_KEY)
 
-Column summary:
-{context[:600]}
+            # ✅ Conversation memory — build messages array from history
+            messages = []
 
-Sample rows:
-{sample}
+            # Add previous turns for context (last 5 turns)
+            if chat_history:
+                for turn in chat_history[-5:]:
+                    messages.append({"role": "user",      "content": turn["q"]})
+                    messages.append({"role": "assistant",  "content": turn["a"]})
+
+            # Add current question
+            messages.append({"role": "user", "content": f"""
+Car booking data analyst. Table: customer_booking_staging (36 cols).
+KPIs: {total_records:,} bookings | {kpi.get('total_customers',0):,} customers | ₹{kpi.get('total_revenue',0):,.0f} revenue.
 
 Question: {question}
 
-Answer in 2-3 sentences with specific numbers. Be direct and concise.
-"""}])
+Answer in 2-3 sentences with specific numbers. Use previous context if relevant.
+"""})
+
+            msg = client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=400,
+                system="You are a data analyst for a car booking pipeline. Be concise and specific with numbers.",
+                messages=messages,
+            )
             return msg.content[0].text
         except Exception:
             pass

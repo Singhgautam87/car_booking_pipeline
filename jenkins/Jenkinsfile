@@ -715,19 +715,43 @@ if exp:
         stage('Start Dashboard') {
             steps {
                 sh '''
+                    # ✅ FastAPI start karo pehle
+                    docker rm -f fastapi || true
+                    docker-compose -p ${COMPOSE_PROJECT} build --no-cache fastapi
+                    docker-compose -p ${COMPOSE_PROJECT} up -d fastapi
+
+                    echo "Waiting for FastAPI..."
+                    for i in $(seq 1 12); do
+                        STATUS=$(docker inspect --format="{{.State.Health.Status}}" fastapi 2>/dev/null || echo "none")
+                        HTTP=$(docker exec fastapi curl -sf -o /dev/null -w "%{http_code}" http://localhost:8000/api/health 2>/dev/null || echo "000")
+                        if [ "$STATUS" = "healthy" ] || [ "$HTTP" = "200" ]; then
+                            echo "✅ FastAPI ready at http://localhost:8000"
+                            echo "   Swagger UI: http://localhost:8000/docs"
+                            break
+                        fi
+                        echo "  Waiting FastAPI... $i/12 | $STATUS | HTTP $HTTP"
+                        sleep 5
+                    done
+
                     docker rm -f dashboard || true
                     docker-compose -p ${COMPOSE_PROJECT} build --no-cache dashboard
                     docker-compose -p ${COMPOSE_PROJECT} up -d dashboard
 
                     DASHBOARD_UP=false
-                    for i in $(seq 1 15); do
+                    for i in $(seq 1 20); do
                         STATUS=$(docker inspect --format="{{.State.Health.Status}}" dashboard 2>/dev/null || echo "none")
                         if [ "$STATUS" = "healthy" ]; then
                             echo "✅ Dashboard ready at http://localhost:8050"
                             DASHBOARD_UP=true
                             break
                         fi
-                        echo "Waiting... $i/15 | $STATUS"
+                        HTTP=$(docker exec dashboard curl -sf -o /dev/null -w "%{http_code}" http://localhost:8050 2>/dev/null || echo "000")
+                        if [ "$HTTP" = "200" ]; then
+                            echo "✅ Dashboard responding HTTP 200"
+                            DASHBOARD_UP=true
+                            break
+                        fi
+                        echo "Waiting... $i/20 | health=$STATUS | http=$HTTP"
                         sleep 10
                     done
 
@@ -761,14 +785,16 @@ if exp:
                     echo "║   PIPELINE v3 COMPLETE                       ║"
                     echo "╠══════════════════════════════════════════════╣"
                     docker exec -e MYSQL_PWD=admin mysql mysql -u admin booking -sN -e "
-                        SELECT CONCAT('  ', RPAD(stage_name,22), ' | ',
-                                      RPAD(status,8), ' | ', duration_seconds, 's')
+                        SELECT CONCAT('  ', RPAD(stage_name,22,' '), ' | ',
+                                      RPAD(status,8,' '), ' | ', duration_seconds, 's')
                         FROM pipeline_run_stats
                         WHERE run_id = '${runId}'
                         ORDER BY started_at;
                     " || true
                     echo "╠══════════════════════════════════════════════╣"
                     echo "  📊 Dashboard      : http://localhost:8050"
+                    echo "  🚀 FastAPI         : http://localhost:8000"
+                    echo "  📖 Swagger UI      : http://localhost:8000/docs"
                     echo "  🧪 MLflow         : http://localhost:5000"
                     echo "  📋 Kafka UI       : http://localhost:8081"
                     echo "  🗄️  MinIO          : http://localhost:9001"

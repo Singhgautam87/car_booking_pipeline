@@ -639,7 +639,14 @@ def render_overview(bk, sla, val, alerts, loy_f, pay_f, trip_f, seg_f, clr):
     health_score = max(0, min(100, round(health_score)))
     health_color = C2 if health_score >= 90 else (C5 if health_score >= 70 else C3)
 
-    fbadge = html.Span(f"[ {total_b:,} records ]", style={"color":MUT,"fontSize":"10px","fontFamily":MONO})
+    # Filter badge — overview uses aggregated data, filters shown as info only
+    active_filters = [f for f in [loy_f, pay_f, trip_f, seg_f] if f]
+    if active_filters:
+        fbadge = html.Span(
+            f"[ filters active: {', '.join(active_filters)} — overview shows full data ]",
+            style={"color":C5,"fontSize":"10px","fontFamily":MONO})
+    else:
+        fbadge = html.Span(f"[ {total_b:,} records ]", style={"color":MUT,"fontSize":"10px","fontFamily":MONO})
 
     # Revenue sparkline — from daily aggregated data
     if not daily_df.empty and "booking_date" in daily_df.columns:
@@ -1670,15 +1677,20 @@ def handle_ai_chat(ask_clicks, quick_clicks, user_input, bk, chat_history):
 
 def _get_ai_answer(question: str, bk) -> str:
     """
-    BookingIntelligenceOrchestrator use karta hai:
-    - Quick questions → quick_answer() (fast)
-    - Full report → full_intelligence_report() (comprehensive)
-    - Fallback → pandas SQL
+    Direct DB se data fetch karta hai — bk dict se nahi
+    (bk ab aggregated dict hai, full df nahi)
     """
     ANTHROPIC_KEY = os.getenv("ANTHROPIC_API_KEY","")
-    df = safe_df(bk)
-    if df.empty:
+
+    # FIX: bk is now a dict — fetch summary from it
+    kpi = bk.get("kpi", [{}])[0] if isinstance(bk, dict) and bk.get("kpi") else {}
+    total_records = int(kpi.get("total_bookings", 0))
+
+    if total_records == 0:
         return "[ no data in staging table — run pipeline first ]"
+
+    # Use a lightweight df for fallback queries
+    df = pd.DataFrame()  # not used for fallback — direct SQL below
 
     # Use Orchestrator if API key available
     if ANTHROPIC_KEY:
@@ -1725,42 +1737,60 @@ Answer in 2-3 sentences with specific numbers. Be direct and concise.
         except Exception:
             pass
 
-    # Pandas SQL fallback — no API key needed
+    # SQL fallback — direct DB queries (no pandas df needed)
     q = question.lower()
     try:
+        engine = pg_engine()
         if "route" in q:
-            res = df.groupby("route")["booking_id"].count().nlargest(5).reset_index() \
-                  if "route" in df.columns else pd.DataFrame()
-            return f"Top routes:\n{res.to_string(index=False)}" if not res.empty else "route column not found"
+            res = pd.read_sql("""
+                SELECT route, COUNT(*) AS bookings,
+                       ROUND(AVG(payment_amount)::numeric,0) AS avg_payment
+                FROM customer_booking_staging
+                GROUP BY route ORDER BY bookings DESC LIMIT 5
+            """, engine)
+            return f"Top routes:\n{res.to_string(index=False)}"
         elif "hour" in q or "busiest" in q:
-            res = df.groupby("pickup_hour")["booking_id"].count().nlargest(5).reset_index() \
-                  if "pickup_hour" in df.columns else pd.DataFrame()
-            return f"Busiest pickup hours:\n{res.to_string(index=False)}" if not res.empty else "pickup_hour not found"
+            res = pd.read_sql("""
+                SELECT pickup_hour, pickup_slot, COUNT(*) AS bookings
+                FROM customer_booking_staging
+                GROUP BY pickup_hour, pickup_slot ORDER BY bookings DESC LIMIT 5
+            """, engine)
+            return f"Busiest hours:\n{res.to_string(index=False)}"
         elif "payment" in q:
-            res = df.groupby("payment_method").agg(
-                count=("booking_id","count"),
-                total=("payment_amount","sum")).reset_index() \
-                  if "payment_method" in df.columns else pd.DataFrame()
-            return f"Payment breakdown:\n{res.to_string(index=False)}" if not res.empty else "payment_method not found"
-        elif "high value" in q or "loyal" in q:
-            res = df.groupby("loyalty_tier").agg(
-                customers=("customer_id","nunique"),
-                high_value=("is_high_value_customer","sum"),
-                avg_payment=("payment_amount","mean")).reset_index() \
-                  if "loyalty_tier" in df.columns else pd.DataFrame()
-            return f"Loyalty + high value:\n{res.to_string(index=False)}" if not res.empty else "loyalty_tier not found"
+            res = pd.read_sql("""
+                SELECT payment_method, COUNT(*) AS count,
+                       ROUND(SUM(payment_amount)::numeric,0) AS total
+                FROM customer_booking_staging
+                GROUP BY payment_method ORDER BY count DESC
+            """, engine)
+            return f"Payment breakdown:\n{res.to_string(index=False)}"
+        elif "loyal" in q or "high value" in q:
+            res = pd.read_sql("""
+                SELECT loyalty_tier, COUNT(DISTINCT customer_id) AS customers,
+                       SUM(is_high_value_customer::int) AS high_value,
+                       ROUND(AVG(payment_amount)::numeric,0) AS avg_payment
+                FROM customer_booking_staging
+                GROUP BY loyalty_tier ORDER BY avg_payment DESC
+            """, engine)
+            return f"Loyalty:\n{res.to_string(index=False)}"
         elif "segment" in q or "car" in q:
-            res = df.groupby("car_segment").agg(
-                bookings=("booking_id","count"),
-                revenue=("payment_amount","sum")).reset_index() \
-                  if "car_segment" in df.columns else pd.DataFrame()
-            return f"Car segment revenue:\n{res.to_string(index=False)}" if not res.empty else "car_segment not found"
+            res = pd.read_sql("""
+                SELECT car_segment, COUNT(*) AS bookings,
+                       ROUND(SUM(payment_amount)::numeric,0) AS revenue
+                FROM customer_booking_staging
+                GROUP BY car_segment ORDER BY bookings DESC
+            """, engine)
+            return f"Car segments:\n{res.to_string(index=False)}"
         else:
-            total_b = df["booking_id"].nunique()    if "booking_id"    in df.columns else len(df)
-            total_r = df["payment_amount"].sum()    if "payment_amount" in df.columns else 0
-            routes  = df["route"].nunique()         if "route"          in df.columns else "—"
-            return (f"Summary: {total_b:,} bookings | ₹{total_r:,.0f} revenue | "
-                    f"{routes} routes\nSet ANTHROPIC_API_KEY for natural language answers.")
+            res = pd.read_sql("""
+                SELECT COUNT(*) AS bookings,
+                       COUNT(DISTINCT customer_id) AS customers,
+                       ROUND(SUM(payment_amount)::numeric,0) AS revenue,
+                       COUNT(DISTINCT route) AS routes
+                FROM customer_booking_staging
+            """, engine)
+            return (f"Summary:\n{res.to_string(index=False)}\n"
+                    f"Set ANTHROPIC_API_KEY for natural language answers.")
     except Exception as e:
         return f"Query error: {e}"
 

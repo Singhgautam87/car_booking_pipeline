@@ -17,6 +17,9 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - JAVA_OPTS=-Xmx512m -Xms256m -XX:+UseG1GC
+      - MYSQL_PWD=${MYSQL_PASSWORD}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - LANGSMITH_API_KEY=${LANGSMITH_API_KEY:-}
     mem_limit: 1g
     memswap_limit: 1g
     networks:
@@ -139,7 +142,11 @@ services:
       - LANGSMITH_API_KEY=${LANGSMITH_API_KEY:-}
       - MLFLOW_TRACKING_URI=http://mlflow:5000
       - POSTGRES_HOST=postgres
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - MYSQL_HOST=mysql
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
     volumes:
       - ./reports:/opt/reports
       - ./config:/opt/config
@@ -154,6 +161,33 @@ services:
     networks:
       - car-booking-network
 
+  # ── SPARK WORKER ───────────────────────────────────────────────
+  spark-worker:
+    image: apache/spark:3.4.2
+    container_name: spark-worker
+    restart: unless-stopped
+    mem_limit: 1g
+    memswap_limit: 1g
+    depends_on:
+      spark:
+        condition: service_healthy
+    environment:
+      - SPARK_WORKER_CORES=2
+      - SPARK_WORKER_MEMORY=768m
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - POSTGRES_HOST=postgres
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - MYSQL_HOST=mysql
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+    volumes:
+      - ./spark/lib:/opt/spark-apps/lib
+      - ./config:/opt/config
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
+    networks:
+      - car-booking-network
+
   # ── MINIO ──────────────────────────────────────────────────────
   minio:
     image: minio/minio
@@ -165,8 +199,8 @@ services:
       - "9000:9000"
       - "9001:9001"
     environment:
-      MINIO_ROOT_USER: admin
-      MINIO_ROOT_PASSWORD: admin123
+      MINIO_ROOT_USER: ${MINIO_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD}
     command: server /data --console-address ":9001"
     volumes:
       - minio_data:/data
@@ -187,9 +221,9 @@ services:
     mem_limit: 512m
     memswap_limit: 512m
     environment:
-      POSTGRES_DB: booking
-      POSTGRES_USER: admin
-      POSTGRES_PASSWORD: admin
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       TZ: Asia/Kolkata
       PGTZ: Asia/Kolkata
     ports:
@@ -213,10 +247,10 @@ services:
     mem_limit: 512m
     memswap_limit: 512m
     environment:
-      MYSQL_DATABASE: booking
-      MYSQL_USER: admin
-      MYSQL_PASSWORD: admin
-      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
     ports:
       - "3306:3306"
     volumes:
@@ -239,7 +273,11 @@ services:
     memswap_limit: 512m
     environment:
       - POSTGRES_HOST=postgres
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - MYSQL_HOST=mysql
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
     volumes:
       - ./great_expectations:/ge
@@ -302,7 +340,11 @@ services:
       - "8050:8050"
     environment:
       - MYSQL_HOST=mysql
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
       - POSTGRES_HOST=postgres
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - LANGSMITH_API_KEY=${LANGSMITH_API_KEY:-}
       - MLFLOW_TRACKING_URI=http://mlflow:5000

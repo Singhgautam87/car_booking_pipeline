@@ -325,7 +325,6 @@ def run_churn_prediction():
 
     if "booking_date" in df.columns:
         df["booking_date_dt"] = pd.to_datetime(df["booking_date"], errors="coerce")
-        # Per customer — last booking date
         last_booking = (df.groupby("customer_id")["booking_date_dt"]
                           .max()
                           .reset_index()
@@ -335,9 +334,13 @@ def run_churn_prediction():
     else:
         df["days_since_last_booking"] = 999
 
-    # Multi-signal churn label — production grade
-    # Signal 1: Recency — 60+ days inactive (strongest signal)
-    recency_churn = df["days_since_last_booking"] > 60
+    # ✅ FIX: Dynamic recency threshold
+    # Agar saara data purana hai (demo data) toh relative cutoff use karo
+    # Top 30% most recent customers = active, baaki = churned
+    p70 = df["days_since_last_booking"].quantile(0.30)
+    recency_threshold = max(60, int(p70))
+    logger.info(f"[Churn] Dynamic recency threshold: {recency_threshold} days (p70={p70:.0f})")
+    recency_churn = df["days_since_last_booking"] > recency_threshold
 
     # Signal 2: Low loyalty + low payment — at-risk segment
     low_loyalty = df["loyalty_tier"].str.lower().isin(["bronze","new","silver"]) \
@@ -394,6 +397,17 @@ def run_churn_prediction():
     # Check class balance
     churn_rate = y.mean()
     logger.info(f"[Churn] Label distribution: {y.value_counts().to_dict()} | churn_rate: {churn_rate:.2%}")
+
+    # ✅ FIX: Safety check — ensure both classes present
+    if y.nunique() < 2:
+        logger.warning(f"[Churn] Only 1 class in labels ({y.unique()}) — adjusting label balance")
+        # Force ~30% churn using behavior signals only
+        df["churn_label"] = (low_loyalty & low_payment & not_vip).astype(int)
+        # If still single class, use quantile split on churn probability proxy
+        if df["churn_label"].nunique() < 2:
+            df["churn_label"] = (df["payment_amount"] < df["payment_amount"].quantile(0.3)).astype(int)
+        y = df["churn_label"]
+        logger.info(f"[Churn] Adjusted label distribution: {y.value_counts().to_dict()}")
 
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42, stratify=y)

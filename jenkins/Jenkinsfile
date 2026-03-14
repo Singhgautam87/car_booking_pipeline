@@ -399,6 +399,11 @@ pipeline {
                 timeout(time: 15, unit: 'MINUTES') {
                     sh '''
                         STAGE_START=$(date +%s)
+                        # ✅ FIX: Staging table clear karo — duplicate booking_id prevent
+                        docker exec postgres psql -U admin -d booking -c \
+                            "TRUNCATE TABLE customer_booking_staging;" || true
+                        echo "✅ Staging table cleared"
+
                         $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
                             /opt/spark-apps/jobs/write_to_postgres.py
                         RECORD_COUNT=$(docker exec postgres psql -U admin -d booking -t -c \
@@ -478,6 +483,20 @@ pipeline {
                     sh '''
                         STAGE_START=$(date +%s)
                         echo "=== Model Evaluation + MLflow ==="
+
+                        # ✅ FIX: MLflow ready hai check karo pehle
+                        echo "Checking MLflow connectivity from spark-master..."
+                        for i in $(seq 1 12); do
+                            MLFLOW_STATUS=$(docker exec spark-master curl -sf \
+                                http://mlflow:5000/api/2.0/mlflow/experiments/list \
+                                -o /dev/null -w "%{http_code}" 2>/dev/null || echo "000")
+                            if [ "$MLFLOW_STATUS" = "200" ]; then
+                                echo "✅ MLflow reachable from spark-master"
+                                break
+                            fi
+                            echo "  Waiting MLflow... $i/12 | HTTP $MLFLOW_STATUS"
+                            sleep 5
+                        done
 
                         docker exec -u root spark-master pip install \
                             "packaging<25" mlflow-skinny sqlalchemy \

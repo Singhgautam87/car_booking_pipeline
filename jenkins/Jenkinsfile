@@ -721,15 +721,14 @@ if exp:
                     docker-compose -p ${COMPOSE_PROJECT} up -d fastapi
 
                     echo "Waiting for FastAPI..."
-                    for i in $(seq 1 12); do
+                    for i in $(seq 1 20); do
                         STATUS=$(docker inspect --format="{{.State.Health.Status}}" fastapi 2>/dev/null || echo "none")
-                        HTTP=$(docker exec fastapi curl -sf -o /dev/null -w "%{http_code}" http://localhost:8000/api/health 2>/dev/null || echo "000")
-                        if [ "$STATUS" = "healthy" ] || [ "$HTTP" = "200" ]; then
+                        if [ "$STATUS" = "healthy" ]; then
                             echo "✅ FastAPI ready at http://localhost:8000"
                             echo "   Swagger UI: http://localhost:8000/docs"
                             break
                         fi
-                        echo "  Waiting FastAPI... $i/12 | $STATUS | HTTP $HTTP"
+                        echo "  Waiting FastAPI... $i/20 | $STATUS"
                         sleep 5
                     done
 

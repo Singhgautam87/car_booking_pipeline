@@ -7,7 +7,6 @@ RUN apt-get update && apt-get install -y \
     curl \
  && rm -rf /var/lib/apt/lists/*
 
-# ✅ All packages pre-installed — no runtime pip install
 RUN pip install --no-cache-dir \
     dash==2.14.2 \
     plotly==5.18.0 \

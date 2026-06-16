@@ -45,7 +45,7 @@ try:
         .mode("overwrite") \
         .save()
 
-    print(f"✅ PostgreSQL staging refreshed | table: {tables['staging']} | records: {total:,}")
+    print(f" PostgreSQL staging refreshed | table: {tables['staging']} | records: {total:,}")
 
 except Exception as e:
     logger.error(f"❌ Write Postgres FAILED: {e}")

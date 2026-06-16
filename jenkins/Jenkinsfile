@@ -22,7 +22,7 @@ pipeline {
 
         PIPELINE_RUN_ID  = """${sh(script: "date +%Y%m%d_%H%M%S", returnStdout: true).trim()}"""
 
-        // ✅ DB Credentials — single source of truth
+        //  DB Credentials — single source of truth
         MYSQL_PWD        = "admin"
         POSTGRES_USER    = "admin"
         POSTGRES_PASSWORD= "admin"
@@ -34,7 +34,7 @@ pipeline {
         MINIO_USER       = "admin"
         MINIO_PASSWORD   = "admin123"
 
-        // ✅ ML thresholds from config.json — single source of truth
+        // ML thresholds from config.json — single source of truth
         DQ_THRESHOLD     = """${sh(script: "python3 -c \"import json; c=json.load(open('config/config.json')); print(c['pipeline']['dq_threshold'])\"", returnStdout: true).trim()}"""
         CHURN_RETRAIN_AUC= """${sh(script: "python3 -c \"import json; c=json.load(open('config/config.json')); print(c['ml']['churn_retrain_auc'])\"", returnStdout: true).trim()}"""
         MODELS_BUCKET    = """${sh(script: "python3 -c \"import json; c=json.load(open('config/config.json')); print(c['ml']['models_bucket'])\"", returnStdout: true).trim()}"""
@@ -69,7 +69,7 @@ pipeline {
                     rm -rf /tmp/ge_* /tmp/spark_* /tmp/producer.py /tmp/car_booking.json || true
 
                     docker-compose -p ${COMPOSE_PROJECT} build great_expectations
-                    echo "✅ Cleanup done!"
+                    echo " Cleanup done!"
                 '''
             }
         }
@@ -88,7 +88,7 @@ pipeline {
                         PG_OK=$(docker inspect --format="{{.State.Health.Status}}"   postgres 2>/dev/null || echo "none")
                         MYSQL_OK=$(docker inspect --format="{{.State.Health.Status}}" mysql   2>/dev/null || echo "none")
                         if [ "$KAFKA_OK" = "healthy" ] && [ "$PG_OK" = "healthy" ] && [ "$MYSQL_OK" = "healthy" ]; then
-                            echo "✅ Core services healthy!"
+                            echo "Core services healthy!"
                             break
                         fi
                         echo "  Waiting... $i/30 | kafka=$KAFKA_OK pg=$PG_OK mysql=$MYSQL_OK"
@@ -99,7 +99,7 @@ pipeline {
                     for i in $(seq 1 12); do
                         MLFLOW_OK=$(docker inspect --format="{{.State.Health.Status}}" mlflow 2>/dev/null || echo "none")
                         if [ "$MLFLOW_OK" = "healthy" ]; then
-                            echo "✅ MLflow ready"
+                            echo " MLflow ready"
                             break
                         fi
                         echo "  MLflow... $i/12 | $MLFLOW_OK"
@@ -113,7 +113,7 @@ pipeline {
                     docker cp config/config.json great_expectations:/opt/config/config.json
 
                     docker-compose -p ${COMPOSE_PROJECT} ps
-                    echo "✅ Infrastructure ready!"
+                    echo " Infrastructure ready!"
                 '''
             }
         }
@@ -126,7 +126,7 @@ pipeline {
                     for i in $(seq 1 12); do
                         STATUS=$(docker inspect --format="{{.State.Health.Status}}" schema-registry 2>/dev/null || echo "none")
                         if [ "$STATUS" = "healthy" ]; then
-                            echo "✅ Schema Registry ready"
+                            echo " Schema Registry ready"
                             break
                         fi
                         echo "Waiting... $i/12 | $STATUS"
@@ -142,7 +142,7 @@ pipeline {
                 sh '''
                     docker exec -i -e MYSQL_PWD=admin mysql mysql -u admin booking < sql/mysql.sql
                     docker exec -i postgres psql -U admin -d booking < sql/postgres.sql
-                    echo "✅ DBs initialized — PostgreSQL (36 cols) + MySQL (6 tables)"
+                    echo " DBs initialized — PostgreSQL (36 cols) + MySQL (6 tables)"
                 '''
             }
         }
@@ -168,7 +168,7 @@ pipeline {
                         VALUES ('car-bookings', 1, ${SCHEMA_ID}, 'REGISTERED',
                                 'booking_id, customer_id, car_id, payment_amount + 15 more', TRUE);
                     "
-                    echo "✅ Schema registered | ID: $SCHEMA_ID"
+                    echo " Schema registered | ID: $SCHEMA_ID"
                 '''
             }
         }
@@ -182,7 +182,7 @@ pipeline {
                         if docker exec kafka kafka-topics --create --if-not-exists \
                             --topic car-bookings --bootstrap-server localhost:9092 \
                             --partitions 3 --replication-factor 1 2>/dev/null; then
-                            echo "✅ Topic ready!"; break
+                            echo "Topic ready!"; break
                         fi
                         sleep 5
                     done
@@ -196,7 +196,7 @@ pipeline {
                             (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
                         VALUES ('${PIPELINE_RUN_ID}', 'kafka_producer', 1000, ${DURATION}, 'SUCCESS', NOW());
                     "
-                    echo "✅ Producer done | ${DURATION}s"
+                    echo " Producer done | ${DURATION}s"
                 '''
             }
         }
@@ -209,9 +209,9 @@ pipeline {
                         rm -rf /data/delta &&
                         mkdir -p /data/delta/raw /data/delta/transformed /data/delta/curated
                     "
-                    # ✅ NEW: models bucket for ML model persistence
+                    # NEW: models bucket for ML model persistence
                     docker exec minio sh -c "mkdir -p /data/models/ml_models" || true
-                    echo "✅ MinIO buckets ready (delta + models)"
+                    echo " MinIO buckets ready (delta + models)"
                 '''
             }
         }
@@ -241,7 +241,7 @@ pipeline {
                                     (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
                                 VALUES ('${PIPELINE_RUN_ID}', 'spark_ingest', 0, ${DURATION}, 'SUCCESS', NOW());
                             "
-                            echo "✅ Bronze layer ready | ${DURATION}s"
+                            echo " Bronze layer ready | ${DURATION}s"
                         '''
                     }
                 }
@@ -264,7 +264,7 @@ pipeline {
                                 (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
                             VALUES ('${PIPELINE_RUN_ID}', 'transform_customer', 0, ${DURATION}, 'SUCCESS', NOW());
                         " || true
-                        echo "✅ Customer transform | ${DURATION}s"
+                        echo " Customer transform | ${DURATION}s"
                     '''
                 }
             }
@@ -296,7 +296,7 @@ pipeline {
                                 (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
                             VALUES ('${PIPELINE_RUN_ID}', 'transform_booking', 0, ${DURATION}, 'SUCCESS', NOW());
                         " || true
-                        echo "✅ Booking transform | ${DURATION}s"
+                        echo "Booking transform | ${DURATION}s"
                     '''
                 }
             }
@@ -328,7 +328,7 @@ pipeline {
                                 (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
                             VALUES ('${PIPELINE_RUN_ID}', 'transform_cars', 0, ${DURATION}, 'SUCCESS', NOW());
                         " || true
-                        echo "✅ Cars transform | ${DURATION}s"
+                        echo " Cars transform | ${DURATION}s"
                     '''
                 }
             }
@@ -363,8 +363,8 @@ pipeline {
                                 (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
                             VALUES ('${PIPELINE_RUN_ID}', 'spark_transform', 0, 0, 'SUCCESS', NOW());
                         " || true
-                        echo "✅ Payments transform | ${DURATION}s"
-                        echo "✅ Silver layer complete — all 4 transforms done"
+                        echo " Payments transform | ${DURATION}s"
+                        echo " Silver layer complete — all 4 transforms done"
                     '''
                 }
             }
@@ -399,7 +399,7 @@ pipeline {
                                 (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
                             VALUES ('${PIPELINE_RUN_ID}', 'spark_merge', 0, ${DURATION}, 'SUCCESS', NOW());
                         "
-                        echo "✅ Curated layer ready | ${DURATION}s"
+                        echo "Curated layer ready | ${DURATION}s"
                     '''
                 }
             }
@@ -411,10 +411,10 @@ pipeline {
                 timeout(time: 15, unit: 'MINUTES') {
                     sh '''
                         STAGE_START=$(date +%s)
-                        # ✅ FIX: Staging table clear karo — duplicate booking_id prevent
+                        # FIX: Staging table clear karo — duplicate booking_id prevent
                         docker exec postgres psql -U admin -d booking -c \
                             "TRUNCATE TABLE customer_booking_staging;" || true
-                        echo "✅ Staging table cleared"
+                        echo " Staging table cleared"
 
                         $SPARK_SUBMIT $SPARK_MEMORY --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF \
                             /opt/spark-apps/jobs/write_to_postgres.py
@@ -426,7 +426,7 @@ pipeline {
                                 (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
                             VALUES ('${PIPELINE_RUN_ID}', 'write_postgres', ${RECORD_COUNT}, ${DURATION}, 'SUCCESS', NOW());
                         "
-                        echo "✅ PostgreSQL ready | Records: ${RECORD_COUNT} | ${DURATION}s"
+                        echo " PostgreSQL ready | Records: ${RECORD_COUNT} | ${DURATION}s"
                     '''
                 }
             }
@@ -463,7 +463,7 @@ pipeline {
                                 (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
                             VALUES ('${PIPELINE_RUN_ID}', 'run_ml_models', 0, ${DURATION}, 'SUCCESS', NOW());
                         "
-                        echo "✅ ML Models v3 done | ${DURATION}s"
+                        echo " ML Models v3 done | ${DURATION}s"
                         echo "   Prophet  : ${FORECAST_COUNT} rows"
                         echo "   Fraud    : ${FRAUD_COUNT} rows"
                         echo "   Churn    : ${CHURN_COUNT} rows"
@@ -496,14 +496,14 @@ pipeline {
                         STAGE_START=$(date +%s)
                         echo "=== Model Evaluation + MLflow ==="
 
-                        # ✅ FIX: MLflow ready hai check karo pehle
+                        # FIX: MLflow ready hai check karo pehle
                         echo "Checking MLflow connectivity from spark-master..."
                         for i in $(seq 1 12); do
                             MLFLOW_STATUS=$(docker exec spark-master curl -sf \
                                 http://mlflow:5000/api/2.0/mlflow/experiments/list \
                                 -o /dev/null -w "%{http_code}" 2>/dev/null || echo "000")
                             if [ "$MLFLOW_STATUS" = "200" ]; then
-                                echo "✅ MLflow reachable from spark-master"
+                                echo " MLflow reachable from spark-master"
                                 break
                             fi
                             echo "  Waiting MLflow... $i/12 | HTTP $MLFLOW_STATUS"
@@ -532,10 +532,10 @@ print('XGBoost AUC      :', r.get('xgboost',{}).get('xgb_auc','N/A'))
 print('Prophet verdict  :', r.get('prophet',{}).get('verdict','N/A'))
 print('Churn verdict    :', r.get('xgboost',{}).get('verdict','N/A'))
 
-# ✅ NEW: Check RETRAIN tag
+#  NEW: Check RETRAIN tag
 churn_verdict = r.get('xgboost',{}).get('verdict','')
 if churn_verdict == 'needs_retraining':
-    print('⚠️  RETRAIN FLAG: XGBoost AUC below threshold — MLflow tagged action_required=RETRAIN')
+    print(' RETRAIN FLAG: XGBoost AUC below threshold — MLflow tagged action_required=RETRAIN')
 "
                         DURATION=$(($(date +%s) - STAGE_START))
                         docker exec -e MYSQL_PWD=admin mysql mysql -u admin booking -e "
@@ -543,7 +543,7 @@ if churn_verdict == 'needs_retraining':
                                 (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
                             VALUES ('${PIPELINE_RUN_ID}', 'model_evaluation', 0, ${DURATION}, 'SUCCESS', NOW());
                         "
-                        echo "✅ Model Evaluation done | MLflow: http://localhost:5000"
+                        echo " Model Evaluation done | MLflow: http://localhost:5000"
                     '''
                 }
             }
@@ -565,7 +565,7 @@ if churn_verdict == 'needs_retraining':
         }
 
         // ── AUTO-RETRAIN CHECK ───────────────────────────────────
-        // ✅ NEW UNIQUE STAGE: MLflow RETRAIN tag → auto trigger retraining
+        //  NEW UNIQUE STAGE: MLflow RETRAIN tag → auto trigger retraining
         stage('Auto-Retrain Check') {
             steps {
                 timeout(time: 15, unit: 'MINUTES') {
@@ -600,7 +600,7 @@ except Exception as e:
                         echo "   RETRAIN needed: ${RETRAIN_NEEDED}"
 
                         if [ "${RETRAIN_NEEDED}" = "YES" ]; then
-                            echo "⚠️  RETRAIN FLAG DETECTED — Re-running ML Models with fresh data"
+                            echo " RETRAIN FLAG DETECTED — Re-running ML Models with fresh data"
 
                             docker exec -e MYSQL_PWD=admin mysql mysql -u admin booking -e "
                                 INSERT INTO pipeline_alerts
@@ -628,7 +628,7 @@ if exp:
     )
     for run in runs:
         client.delete_tag(run.info.run_id, 'action_required')
-    print(f'✅ RETRAIN tag cleared from {len(runs)} runs')
+    print(f' RETRAIN tag cleared from {len(runs)} runs')
 " 2>/dev/null || true
 
                             docker exec -e MYSQL_PWD=admin mysql mysql -u admin booking -e "
@@ -636,9 +636,9 @@ if exp:
                                     (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
                                 VALUES ('${PIPELINE_RUN_ID}', 'auto_retrain', 0, 0, 'SUCCESS', NOW());
                             " || true
-                            echo "✅ Auto-retrain complete"
+                            echo " Auto-retrain complete"
                         else
-                            echo "✅ Models healthy — no retraining needed"
+                            echo " Models healthy — no retraining needed"
                             docker exec -e MYSQL_PWD=admin mysql mysql -u admin booking -e "
                                 INSERT INTO pipeline_run_stats
                                     (run_id, stage_name, records_processed, duration_seconds, status, completed_at)
@@ -650,7 +650,7 @@ if exp:
             }
             post {
                 failure {
-                    sh 'echo "⚠️ Auto-retrain check failed — continuing pipeline"'
+                    sh 'echo " Auto-retrain check failed — continuing pipeline"'
                 }
             }
         }
@@ -705,7 +705,7 @@ if exp:
                         "
                     fi
 
-                    echo "✅ Validation done | DQ: ${DQ_SCORE}% | Failed records: ${FAILED_COUNT}"
+                    echo "Validation done | DQ: ${DQ_SCORE}% | Failed records: ${FAILED_COUNT}"
                     echo "   Failed columns: ${FAILED_COLS}"
                 '''
             }
@@ -715,7 +715,7 @@ if exp:
         stage('Start Dashboard') {
             steps {
                 sh '''
-                    # ✅ FastAPI start karo pehle
+                    #  FastAPI start karo pehle
                     docker rm -f fastapi || true
                     docker-compose -p ${COMPOSE_PROJECT} build --no-cache fastapi
                     docker-compose -p ${COMPOSE_PROJECT} up -d fastapi
@@ -724,7 +724,7 @@ if exp:
                     for i in $(seq 1 20); do
                         STATUS=$(docker inspect --format="{{.State.Health.Status}}" fastapi 2>/dev/null || echo "none")
                         if [ "$STATUS" = "healthy" ]; then
-                            echo "✅ FastAPI ready at http://localhost:8000"
+                            echo " FastAPI ready at http://localhost:8000"
                             echo "   Swagger UI: http://localhost:8000/docs"
                             break
                         fi
@@ -740,13 +740,13 @@ if exp:
                     for i in $(seq 1 20); do
                         STATUS=$(docker inspect --format="{{.State.Health.Status}}" dashboard 2>/dev/null || echo "none")
                         if [ "$STATUS" = "healthy" ]; then
-                            echo "✅ Dashboard ready at http://localhost:8050"
+                            echo " Dashboard ready at http://localhost:8050"
                             DASHBOARD_UP=true
                             break
                         fi
                         HTTP=$(docker exec dashboard curl -sf -o /dev/null -w "%{http_code}" http://localhost:8050 2>/dev/null || echo "000")
                         if [ "$HTTP" = "200" ]; then
-                            echo "✅ Dashboard responding HTTP 200"
+                            echo " Dashboard responding HTTP 200"
                             DASHBOARD_UP=true
                             break
                         fi
@@ -755,7 +755,7 @@ if exp:
                     done
 
                     if [ "$DASHBOARD_UP" = "false" ]; then
-                        echo "⚠️ Dashboard timeout — check http://localhost:8050"
+                        echo " Dashboard timeout — check http://localhost:8050"
                         docker logs dashboard --tail 20 || true
                     fi
                 '''
@@ -779,10 +779,7 @@ if exp:
                                 CONCAT('Pipeline #${buildNumber} done in ${buildDuration}'), 'SUCCESS');
                     " || true
 
-                    echo ""
-                    echo "╔══════════════════════════════════════════════╗"
-                    echo "║   PIPELINE v3 COMPLETE                       ║"
-                    echo "╠══════════════════════════════════════════════╣"
+                    
                     docker exec -e MYSQL_PWD=admin mysql mysql -u admin booking -sN -e "
                         SELECT CONCAT('  ', RPAD(stage_name,22,' '), ' | ',
                                       RPAD(status,8,' '), ' | ', duration_seconds, 's')
@@ -790,7 +787,7 @@ if exp:
                         WHERE run_id = '${runId}'
                         ORDER BY started_at;
                     " || true
-                    echo "╠══════════════════════════════════════════════╣"
+                    
                     echo "  📊 Dashboard      : http://localhost:8050"
                     echo "  🚀 FastAPI         : http://localhost:8000"
                     echo "  📖 Swagger UI      : http://localhost:8000/docs"
@@ -799,13 +796,13 @@ if exp:
                     echo "  🗄️  MinIO          : http://localhost:9001"
                     echo "  ⚡ Spark UI       : http://localhost:8082"
                     echo "  🔀 Schema Registry: http://localhost:8085"
-                    echo "╚══════════════════════════════════════════════╝"
+                    
                 """
             }
 
             mail(
                 to:      "${ALERT_EMAIL}",
-                subject: "✅ Car Booking Pipeline v3 — SUCCESS #${BUILD_NUMBER}",
+                subject: "Car Booking Pipeline v3 — SUCCESS #${BUILD_NUMBER}",
                 body:    """
 Pipeline v3 completed successfully!
 
@@ -849,7 +846,7 @@ Links:
 
             mail(
                 to:      "${ALERT_EMAIL}",
-                subject: "❌ Car Booking Pipeline v3 — FAILED #${BUILD_NUMBER}",
+                subject: "Car Booking Pipeline v3 — FAILED #${BUILD_NUMBER}",
                 body:    """
 Pipeline FAILED!
 

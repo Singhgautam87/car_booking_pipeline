@@ -1,18 +1,3 @@
-"""
-Car Booking Pipeline Dashboard — v3
-Architecture : dcc.Store → tab-specific callbacks → lazy tab loading
-Stack        : Kafka → Spark → Delta Lake → PostgreSQL → Dash
-New in v3    : BLANK SCREEN FIX — aggregated queries, not SELECT *
-               Weighted Health Score 0-100
-               AI Auto-Insights on page load
-               GE failed records → Claude root cause analysis
-
-FIXES:
-  - FIX 1: kpi variable shadowing in render_ai → renamed to kpi_ctx
-  - FIX 2: **CBASE duplicate paper_bgcolor → L() helper function
-  - FIX 3: groupby["success"].agg(named=...) → named aggregation syntax
-  - FIX 4: run_id KeyError → safe column access with try/except
-"""
 import os
 import json
 import requests
@@ -23,10 +8,6 @@ import plotly.graph_objects as go
 import pandas as pd
 import numpy as np
 from sqlalchemy import create_engine
-
-# ================================================================
-# FASTAPI — production pattern: dashboard → API → DB
-# ================================================================
 FASTAPI_URL = os.getenv("FASTAPI_URL", "http://fastapi:8000")
 
 def api_get(endpoint: str) -> list:
@@ -39,9 +20,7 @@ def api_get(endpoint: str) -> list:
         print(f"[API FALLBACK] {endpoint}: {e}")
     return []
 
-# ================================================================
-# DB CONNECTIONS
-# ================================================================
+
 import time as _time
 from sqlalchemy.pool import QueuePool
 
@@ -281,9 +260,6 @@ CBASE = dict(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor=CARD,
              margin=dict(l=50, r=20, t=46, b=38),
              title_font=dict(color=C1, size=12, family=MONO))
 AXIS  = dict(gridcolor=GR, zerolinecolor=GR, color=SUB)
-
-# ✅ FIX 2: L() helper — CBASE + extra kwargs, no duplicate key crash
-def L(**kwargs): return {**CBASE, **kwargs}
 
 # ✅ FIX 2: L() helper — merges CBASE with extra kwargs, no duplicate key issue
 def L(**kwargs):
@@ -991,8 +967,7 @@ def render_routes(bk, loy_f, pay_f, trip_f, seg_f, clr):
                            color="car_segment" if "car_segment" in tt.columns else "trip_type",
                            title="trip_type × car_segment",
                            barmode="stack",
-                           color_discrete_sequence=[C1,C2,C4,C5,C7],
-                           template=None)
+                           color_discrete_sequence=[C1,C2,C4,C5,C7])
         fig_trip.update_layout(**L(xaxis=AXIS, yaxis=AXIS, height=280))
     else:
         fig_trip = empty("trip type"); fig_trip.update_layout(height=280)

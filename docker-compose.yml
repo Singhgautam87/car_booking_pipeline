@@ -276,18 +276,30 @@ services:
       - car-booking-network
   mlflow:
     image: ghcr.io/mlflow/mlflow:latest
+    container_name: mlflow
+    restart: unless-stopped
+
+    ports:
+      - "5000:5000"
+
     command: >
       mlflow server
       --host 0.0.0.0
       --port 5000
       --backend-store-uri sqlite:///mlflow.db
 
+    volumes:
+      - mlflow_data:/mlflow
+
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:5000/health || exit 1"]
-      interval: 30s
+      test: ["CMD-SHELL", "curl -sf http://localhost:5000 || exit 1"]
+      interval: 15s
       timeout: 10s
       retries: 10
       start_period: 60s
+
+    networks:
+      - car-booking-network
   fastapi:
     build:
       context: ./app

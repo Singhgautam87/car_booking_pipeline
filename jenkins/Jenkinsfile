@@ -70,7 +70,12 @@ wait_http(){ for i in $(seq 1 $2); do c=$(docker exec spark-master curl -sf "$1"
                         [ "$K" = healthy ] && [ "$P" = healthy ] && [ "$M" = healthy ] && break
                         sleep 10
                     done
-                    wait_ok mlflow 12 5
+                    echo "Waiting for MLflow..."
+                    wait_ok mlflow 30 10 || {
+                        echo "MLflow failed"
+                        docker logs mlflow --tail 100
+                        exit 1
+                    }
                     docker cp spark/. spark-master:/opt/spark-apps/
                     docker exec -u root spark-master mkdir -p /opt/config
                     docker cp config/config.json spark-master:/opt/config/config.json

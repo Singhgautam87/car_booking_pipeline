@@ -278,24 +278,31 @@ services:
     image: ghcr.io/mlflow/mlflow:latest
     container_name: mlflow
     restart: unless-stopped
-    mem_limit: 256m
-    memswap_limit: 256m
+    mem_limit: 512m
+    memswap_limit: 512m
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     ports:
       - "5000:5000"
+
     command: >
       mlflow server
       --host 0.0.0.0
       --port 5000
       --backend-store-uri sqlite:///mlflow.db
       --default-artifact-root /mlflow/artifacts
+
     volumes:
       - mlflow_data:/mlflow
+
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/api/2.0/mlflow/experiments/list"]
-      interval: 15s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
+      test: ["CMD-SHELL","curl -sf http://localhost:5000 >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+
     networks:
       - car-booking-network
   fastapi:

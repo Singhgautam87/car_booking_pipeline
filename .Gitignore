@@ -1,11 +1,11 @@
-# ✅ Credentials & Secrets
+#  Credentials & Secrets
 config/config.json
 *.env
 .env
 .env.*
 secrets/
 
-# ✅ Python
+#  Python
 __pycache__/
 *.py[cod]
 *.pyo
@@ -18,40 +18,40 @@ venv/
 env/
 .venv/
 
-# ✅ Spark / Delta
+# Spark / Delta
 derby.log
 metastore_db/
 spark-warehouse/
 *.crc
 
-# ✅ Great Expectations
+#  Great Expectations
 great_expectations/uncommitted/
 great_expectations/.ge_store_backend_id
 
-# ✅ Docker
+# Docker
 .docker/
 
-# ✅ Jenkins
+# Jenkins
 .jenkins/
 
-# ✅ IDE
+# IDE
 .idea/
 .vscode/
 *.iml
 *.ipr
 *.iws
 
-# ✅ OS
+# OS
 .DS_Store
 Thumbs.db
 desktop.ini
 
-# ✅ Logs
+# Logs
 *.log
 logs/
 /tmp/
 
-# ✅ Reports (generated)
+# Reports (generated)
 reports/
 *.html
 !realtime_dashboard/*.html

@@ -1,6 +1,4 @@
 services:
-
-  # ── JENKINS ────────────────────────────────────────────────────
   jenkins:
     build: ./jenkins
     container_name: jenkins
@@ -24,8 +22,6 @@ services:
     memswap_limit: 1g
     networks:
       - car-booking-network
-
-  # ── ZOOKEEPER ──────────────────────────────────────────────────
   zookeeper:
     image: confluentinc/cp-zookeeper:7.5.0
     container_name: zookeeper
@@ -43,8 +39,6 @@ services:
       start_period: 40s
     networks:
       - car-booking-network
-
-  # ── KAFKA ──────────────────────────────────────────────────────
   kafka:
     image: confluentinc/cp-kafka:7.5.0
     container_name: kafka
@@ -73,8 +67,6 @@ services:
       start_period: 40s
     networks:
       - car-booking-network
-
-  # ── SCHEMA REGISTRY ────────────────────────────────────────────
   schema-registry:
     image: confluentinc/cp-schema-registry:7.5.0
     container_name: schema-registry
@@ -100,8 +92,6 @@ services:
       start_period: 30s
     networks:
       - car-booking-network
-
-  # ── KAFKA UI ───────────────────────────────────────────────────
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
     container_name: kafka-ui
@@ -120,10 +110,6 @@ services:
         condition: service_healthy
     networks:
       - car-booking-network
-
-  # ── SPARK ──────────────────────────────────────────────────────
-  # mem_limit 2g — sequential transforms mein ek waqt 1 job
-  # 512m driver + 256m executor + overhead = ~1g comfortable fit
   spark:
     image: apache/spark:3.4.2
     container_name: spark-master
@@ -161,8 +147,6 @@ services:
       start_period: 30s
     networks:
       - car-booking-network
-
-  # ── SPARK WORKER ───────────────────────────────────────────────
   spark-worker:
     image: apache/spark:3.4.2
     container_name: spark-worker
@@ -188,8 +172,6 @@ services:
     command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
     networks:
       - car-booking-network
-
-  # ── MINIO ──────────────────────────────────────────────────────
   minio:
     image: minio/minio
     container_name: minio
@@ -213,8 +195,6 @@ services:
       start_period: 20s
     networks:
       - car-booking-network
-
-  # ── POSTGRESQL ─────────────────────────────────────────────────
   postgres:
     image: postgres:15
     container_name: postgres
@@ -239,8 +219,6 @@ services:
       start_period: 20s
     networks:
       - car-booking-network
-
-  # ── MYSQL ──────────────────────────────────────────────────────
   mysql:
     image: mysql:8
     container_name: mysql
@@ -264,8 +242,6 @@ services:
       start_period: 30s
     networks:
       - car-booking-network
-
-  # ── GREAT EXPECTATIONS ─────────────────────────────────────────
   great_expectations:
     build: ./great_expectations
     container_name: great_expectations
@@ -298,9 +274,6 @@ services:
       retries: 3
     networks:
       - car-booking-network
-
-  # ── MLFLOW ─────────────────────────────────────────────────────
-  # Spark khatam hone ke baad chalta hai — memory free hoti hai
   mlflow:
     image: ghcr.io/mlflow/mlflow:latest
     container_name: mlflow
@@ -325,8 +298,6 @@ services:
       start_period: 30s
     networks:
       - car-booking-network
-
-  # ── FASTAPI ────────────────────────────────────────────────────
   fastapi:
     build:
       context: ./app
@@ -360,9 +331,7 @@ services:
     networks:
       - car-booking-network
 
-  # ── DASHBOARD ──────────────────────────────────────────────────
-  # Claude API = network call, no local compute
-  # 512m dashboard mein comfortably fit ✅
+
   dashboard:
     build:
       context: ./realtime_dashboard

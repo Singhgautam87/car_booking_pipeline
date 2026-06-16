@@ -40,8 +40,6 @@ try:
         trim(col("booking_details.drop.location")).alias("drop_location"),
         trim(col("booking_details.drop.time")).alias("drop_time"),
     )
-
-    # ✅ Pickup hour extract — "3:00 AM" → 3
     booking_clean = booking_clean.withColumn(
         "pickup_hour",
         regexp_extract(col("pickup_time"), r"(\d+):", 1).cast("integer")
@@ -53,8 +51,6 @@ try:
              lit(0))
         .otherwise(col("pickup_hour"))
     )
-
-    # ✅ Time slot classify
     booking_clean = booking_clean.withColumn(
         "pickup_slot",
         when((col("pickup_hour") >= 0)  & (col("pickup_hour") < 6),  lit("late_night"))
@@ -62,47 +58,39 @@ try:
         .when((col("pickup_hour") >= 12) & (col("pickup_hour") < 18), lit("afternoon"))
         .otherwise(lit("evening"))
     )
-
-    # ✅ Trip type — same city vs different city
     booking_clean = booking_clean.withColumn(
         "trip_type",
         when(col("pickup_location") == col("drop_location"), lit("local"))
         .otherwise(lit("intercity"))
     )
-
-    # ✅ Route — FIXED: using concat() function instead of .concat() method
     booking_clean = booking_clean.withColumn(
         "route",
         concat(col("pickup_location"), lit(" → "), col("drop_location"))
     )
-
-    # ✅ Partition columns
     booking_clean = booking_clean \
         .withColumn("booking_year",  year(col("booking_date"))) \
         .withColumn("booking_month", month(col("booking_date"))) \
         .withColumn("transformed_at", current_timestamp())
 
     output_path = delta_paths['booking_transformed']
-
-    # ✅ IDEMPOTENCY — MERGE
     if DeltaTable.isDeltaTable(spark, output_path):
         DeltaTable.forPath(spark, output_path).alias("target").merge(
             booking_clean.alias("source"),
             "target.booking_id = source.booking_id"
         ).whenMatchedUpdateAll().whenNotMatchedInsertAll().execute()
-        print("✅ Booking MERGED (idempotent)")
+        print("Booking MERGED (idempotent)")
     else:
         booking_clean.write \
             .format("delta") \
             .partitionBy("booking_year", "booking_month") \
             .mode("overwrite") \
             .save(output_path)
-        print("✅ Booking CREATED (first run)")
+        print("Booking CREATED (first run)")
 
     total = spark.read.format("delta").load(output_path).count()
-    print(f"✅ Booking transformed | records: {total:,}")
+    print(f"Booking transformed | records: {total:,}")
 
 except Exception as e:
-    logger.error(f"❌ Transform Booking FAILED: {e}")
+    logger.error(f"Transform Booking FAILED: {e}")
     spark.stop()
     sys.exit(1)

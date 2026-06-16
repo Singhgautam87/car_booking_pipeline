@@ -1,4 +1,3 @@
--- ── 1. VALIDATION RESULTS (run summary) ──────────────
 CREATE TABLE IF NOT EXISTS validation_results (
     result_id           INT AUTO_INCREMENT PRIMARY KEY,
     run_identifier      VARCHAR(255),
@@ -13,8 +12,6 @@ CREATE TABLE IF NOT EXISTS validation_results (
     UNIQUE KEY uq_run_identifier (run_identifier),
     INDEX idx_created   (created_at)
 );
-
--- ── 2. VALIDATION EXPECTATION DETAILS (flat GE JSON) ─
 CREATE TABLE IF NOT EXISTS validation_expectation_details (
     id                              INT AUTO_INCREMENT PRIMARY KEY,
     run_identifier                  VARCHAR(255),
@@ -42,8 +39,6 @@ CREATE TABLE IF NOT EXISTS validation_expectation_details (
     INDEX idx_column      (column_name),
     INDEX idx_expectation (expectation_type)
 );
-
--- ── 3. VALIDATION FAILED RECORDS ─────────────────────
 CREATE TABLE IF NOT EXISTS validation_failed_records (
     id                  INT AUTO_INCREMENT PRIMARY KEY,
     run_identifier      VARCHAR(255),
@@ -73,8 +68,6 @@ CREATE TABLE IF NOT EXISTS validation_failed_records (
     INDEX idx_booking   (booking_id),
     INDEX idx_type      (expectation_type)
 );
-
--- ── 4. PIPELINE RUN STATS (SLA monitoring) ───────────
 CREATE TABLE IF NOT EXISTS pipeline_run_stats (
     id                  INT AUTO_INCREMENT PRIMARY KEY,
     run_id              VARCHAR(100)  NOT NULL,
@@ -93,14 +86,13 @@ CREATE TABLE IF NOT EXISTS pipeline_run_stats (
     INDEX idx_status    (status),
     INDEX idx_started   (started_at)
 );
--- ── 5. PIPELINE ALERTS ───────────────────────────────────────────
 CREATE TABLE pipeline_alerts (
     id                   INT AUTO_INCREMENT PRIMARY KEY,
-    pipeline_name        VARCHAR(100),          -- Jenkins pipeline name
-    stage_name           VARCHAR(100),          -- Jenkins stage name
+    pipeline_name        VARCHAR(100),         
+    stage_name           VARCHAR(100),         
     execution_date       TIMESTAMP NULL,
     error_message        TEXT,
-    alert_type           VARCHAR(50),           -- FAILURE / DQ_WARNING / SUCCESS / SCHEMA_ERROR
+    alert_type           VARCHAR(50),          
     acknowledged         BOOLEAN DEFAULT FALSE,
     created_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_pipeline (pipeline_name),
@@ -110,7 +102,7 @@ CREATE TABLE pipeline_alerts (
 );
 
 
--- ── 6. SCHEMA REGISTRY LOG (NEW — Schema changes track) ──────────
+
 CREATE TABLE schema_registry_log (
     id                   INT AUTO_INCREMENT PRIMARY KEY,
     topic                VARCHAR(100),          -- Kafka topic name
@@ -124,7 +116,7 @@ CREATE TABLE schema_registry_log (
     INDEX idx_version (schema_version)
 );
 
--- ── SAMPLE DATA — Schema log mein initial entry ──────────────────
+
 INSERT INTO schema_registry_log
     (topic, schema_version, schema_id, change_type, schema_summary, is_compatible)
 VALUES
@@ -132,5 +124,5 @@ VALUES
      'Initial schema: booking_id, customer_id, car_id, payment_amount, loyalty_tier',
      TRUE);
 
-SELECT '✅ MySQL schema created successfully!' AS status;
+SELECT ' MySQL schema created successfully!' AS status;
 SELECT 'Tables: validation_results, validation_expectation_details, validation_failed_records, pipeline_run_stats, pipeline_alerts, schema_registry_log' AS tables_created;

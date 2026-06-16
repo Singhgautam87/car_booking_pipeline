@@ -1,19 +1,3 @@
-"""
-AI Agents v3 — Car Booking Pipeline
-=====================================
-FIXES vs v2:
-  - FIX 1: create_sql_agent removed — Direct Claude API (no LangChain dep)
-  - FIX 2: Health score continuous weighted formula (not 100/65/30)
-  - FIX 3: GE validation_failed_records → Claude (unique feature)
-  - FIX 4: Parallel agent execution — ThreadPoolExecutor
-  - FIX 5: _synthesize() includes GE column failures
-  - FIX 6: BookingRAGAgent graceful fallback (pgvector not required)
-
-Stack: Kafka → Spark → Delta Lake → PostgreSQL → Dash
-MySQL: pipeline_run_stats, pipeline_alerts, validation_results,
-       validation_expectation_details, validation_failed_records
-"""
-
 import os, sys, json, time, logging, psycopg2, pymysql
 import pandas as pd
 from datetime import datetime
@@ -31,8 +15,6 @@ config       = load_config()
 postgres_cfg = config.get_postgres_config()
 mysql_cfg    = config.get_mysql_config()
 tables       = config.get_tables()
-
-# ✅ ML thresholds from config.json — single source of truth
 _ml_cfg = config._config.get("ml", {}) if hasattr(config, "_config") else {}
 CHURN_RETRAIN_AUC    = float(_ml_cfg.get("churn_retrain_auc",    0.70))
 CHURN_THRESHOLD_DAYS = int(_ml_cfg.get("churn_threshold_days",   60))
@@ -63,9 +45,6 @@ PG_ENGINE = create_engine(PG_SQLALCHEMY_URL)
 
 def get_pg_conn():    return psycopg2.connect(**PG_CONN_PARAMS)
 def get_mysql_conn(): return pymysql.connect(**MYSQL_CONN_PARAMS)
-
-
-# ── LangSmith setup ─────────────────────────────────────────────
 def _setup_langsmith():
     if not LANGSMITH_API_KEY: return False
     try:
@@ -79,9 +58,6 @@ def _setup_langsmith():
         logger.warning(f"[LangSmith] {e}"); return False
 
 LANGSMITH_ENABLED = _setup_langsmith()
-
-
-# ── MLflow setup ─────────────────────────────────────────────────
 def _get_mlflow_client():
     try:
         import mlflow, requests
@@ -94,12 +70,6 @@ def _get_mlflow_client():
         return mlflow
     except Exception as e:
         logger.warning(f"[MLflow] {e}"); return None
-
-
-# ══════════════════════════════════════════════════════════════════
-# 1. TEXT-TO-SQL AGENT
-# FIX 1: Direct Claude API — no LangChain create_sql_agent
-# ══════════════════════════════════════════════════════════════════
 class TextToSQLAgent:
     """Natural language → SQL → Claude explains result"""
 
@@ -121,8 +91,6 @@ Columns: booking_id, customer_id, customer_name, email,
 
         # Get data via SQL fallback first
         data_result = self._sql_fallback(question, run_id)
-
-        # Then use Claude to explain/enrich if API key available
         if ANTHROPIC_API_KEY and data_result.get("status") == "success":
             try:
                 import anthropic
@@ -227,7 +195,6 @@ Give 2-3 sentence business insight with specific numbers from the data.
                            SUM(CASE WHEN is_high_value_customer THEN 1 ELSE 0 END) AS high_value_at_risk
                     FROM ml_churn_scores GROUP BY churn_risk ORDER BY avg_prob DESC
                 """, PG_ENGINE)
-                # Also get recency context
                 recency = pd.read_sql(f"""
                     SELECT COUNT(DISTINCT customer_id) AS inactive_60d
                     FROM {STAGING_TABLE}
@@ -261,13 +228,6 @@ Give 2-3 sentence business insight with specific numbers from the data.
             return {"status": "error", "question": question,
                     "answer": f"Query error: {e}", "mode": "error",
                     "timestamp": datetime.now().isoformat()}
-
-
-# ══════════════════════════════════════════════════════════════════
-# 2. PIPELINE HEALTH AGENT
-# FIX 2: Continuous health score (weighted formula)
-# FIX 3: GE validation_failed_records → Claude (UNIQUE FEATURE)
-# ══════════════════════════════════════════════════════════════════
 class PipelineHealthAgent:
 
     def get_pipeline_stats(self) -> pd.DataFrame:
@@ -304,8 +264,6 @@ class PipelineHealthAgent:
             """, conn); conn.close(); return df
         except Exception as e:
             logger.error(f"[Health] dq: {e}"); return pd.DataFrame()
-
-    # ✅ FIX 3: UNIQUE — GE failed records + columns → Claude
     def get_failed_expectations(self) -> dict:
         """
         Fetch specific column failures + failed booking_ids from MySQL.
@@ -313,7 +271,7 @@ class PipelineHealthAgent:
         """
         try:
             conn = get_mysql_conn()
-            # Top failed columns
+            
             failed_cols = pd.read_sql("""
                 SELECT column_name, expectation_type,
                        COUNT(*) AS failure_count,
@@ -327,7 +285,7 @@ class PipelineHealthAgent:
                 ORDER BY failure_count DESC LIMIT 10
             """, conn)
 
-            # Sample failed booking_ids
+            
             sample_bookings = pd.read_sql("""
                 SELECT booking_id, column_name, failed_reason, payment_amount, loyalty_tier
                 FROM validation_failed_records
@@ -353,8 +311,6 @@ class PipelineHealthAgent:
         stats  = self.get_pipeline_stats()
         alerts = self.get_active_alerts()
         dq     = self.get_dq_results()
-
-        # ✅ FIX 3: Get GE failed records context
         ge_failures = self.get_failed_expectations()
 
         failed_stages   = len(stats[stats["status"] == "FAILED"])          if not stats.empty  and "status"       in stats.columns  else 0
@@ -362,7 +318,6 @@ class PipelineHealthAgent:
         dq_warnings     = len(alerts[alerts["alert_type"] == "DQ_WARNING"]) if not alerts.empty and "alert_type"   in alerts.columns else 0
         dq_score        = float(dq["success_rate"].mean())                  if not dq.empty     and "success_rate" in dq.columns     else 100.0
 
-        # ✅ FIX 2: Continuous weighted health score
         health_score = 100
         health_score -= failed_stages * 15
         health_score -= critical_alerts * 10
@@ -443,10 +398,6 @@ Provide:
         except Exception as e:
             return f"Claude error: {e}"
 
-
-# ══════════════════════════════════════════════════════════════════
-# 3. ANOMALY EXPLAINER AGENT
-# ══════════════════════════════════════════════════════════════════
 class AnomalyExplainerAgent:
 
     def explain(self, anomaly_record: dict, run_id: Optional[str] = None) -> dict:
@@ -504,12 +455,6 @@ Explain:
             return df.iloc[0].to_dict() if not df.empty else {}
         except Exception:
             return {}
-
-
-# ══════════════════════════════════════════════════════════════════
-# 4. BOOKING RAG AGENT
-# FIX 6: Graceful fallback — pgvector not required
-# ══════════════════════════════════════════════════════════════════
 class BookingRAGAgent:
 
     COLLECTION = "car_booking_embeddings"
@@ -519,8 +464,6 @@ class BookingRAGAgent:
         try:
             from langchain_community.vectorstores import PGVector
             from langchain_community.embeddings  import HuggingFaceEmbeddings
-
-            # ✅ FIX 6: Check pgvector extension exists before connecting
             conn = get_pg_conn(); cur = conn.cursor()
             cur.execute("SELECT 1 FROM pg_extension WHERE extname='vector'")
             has_pgvector = cur.fetchone() is not None
@@ -569,11 +512,6 @@ class BookingRAGAgent:
         except Exception as e:
             return {"question": question, "answer": f"Error: {e}",
                     "timestamp": datetime.now().isoformat()}
-
-
-# ══════════════════════════════════════════════════════════════════
-# 5. MODEL EVALUATION AGENT
-# ══════════════════════════════════════════════════════════════════
 class ModelEvaluationAgent:
 
     def __init__(self):
@@ -613,7 +551,7 @@ class ModelEvaluationAgent:
                 / merged["actual_bookings"].clip(lower=1)
             ).mean() * 100)
 
-            # Use stored CV mape if available
+           
             stored_mape = forecast["mape"].dropna().iloc[0] if "mape" in forecast.columns and not forecast["mape"].dropna().empty else None
             final_mape  = stored_mape if stored_mape else round(mape, 2)
 
@@ -700,13 +638,6 @@ class ModelEvaluationAgent:
             return True
         except Exception:
             return False
-
-
-# ══════════════════════════════════════════════════════════════════
-# 6. BOOKING INTELLIGENCE ORCHESTRATOR
-# FIX 4: Parallel agent execution — ThreadPoolExecutor
-# FIX 5: _synthesize with GE context
-# ══════════════════════════════════════════════════════════════════
 class BookingIntelligenceOrchestrator:
 
     def __init__(self):
@@ -720,8 +651,6 @@ class BookingIntelligenceOrchestrator:
     def full_intelligence_report(self, question: str = "Give complete business intelligence") -> dict:
         start = time.time()
         logger.info(f"[Orchestrator] Starting parallel execution — run_id: {self.run_id}")
-
-        # ✅ FIX 4: Parallel execution — 3-4x faster
         results = {}
         with ThreadPoolExecutor(max_workers=3) as executor:
             futures = {
@@ -743,8 +672,6 @@ class BookingIntelligenceOrchestrator:
         results["fraud"] = (self.anomaly_agent.explain(fraud_booking, self.run_id)
                             if fraud_booking
                             else {"explanation": "No high-risk bookings detected"})
-
-        # FIX 5: Synthesize with GE context
         final_insight = self._synthesize(question, results)
         total_time    = round(time.time() - start, 2)
         logger.info(f"[Orchestrator] Complete in {total_time}s (parallel)")
@@ -796,8 +723,6 @@ class BookingIntelligenceOrchestrator:
         eval_r  = results.get("eval",   {})
         sql_r   = results.get("sql",    {})
         fraud_r = results.get("fraud",  {})
-
-        # GE context for synthesis
         ge_failures = health.get("ge_failures", {})
         ge_summary  = ""
         if ge_failures.get("failed_columns"):
@@ -820,7 +745,7 @@ AI Intelligence layer for car booking pipeline. 4 agents ran in parallel.
 
 QUESTION: {question}
 
-━━━━ AGENT RESULTS ━━━━
+
 1. DATA (TextToSQL):
 {sql_r.get('answer','no data')[:400]}
 
@@ -837,18 +762,12 @@ Alert: {str(fraud_r.get('explanation','none'))[:200]}
 Prophet MAPE: {eval_r.get('prophet',{}).get('mape','?')}%
 XGBoost AUC: {eval_r.get('xgboost',{}).get('xgb_auc','?')}
 Churn high-risk: {eval_r.get('xgboost',{}).get('high_risk_customers','?')}
-━━━━━━━━━━━━━━━━━━━━━
 
 3-4 sentence executive summary. Be specific with numbers. Flag concerns clearly.
 """}])
             return msg.content[0].text
         except Exception as e:
             return f"Synthesis error: {e}"
-
-
-# ══════════════════════════════════════════════════════════════════
-# QUICK TEST
-# ══════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
     print("\n" + "="*60)
     print("  AI AGENTS v3 — Car Booking Pipeline")

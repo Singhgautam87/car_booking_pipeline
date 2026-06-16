@@ -31,8 +31,6 @@ try:
     booking_df  = spark.read.format("delta").load(delta_paths['booking_transformed'])
     cars_df     = spark.read.format("delta").load(delta_paths['cars_transformed'])
     payments_df = spark.read.format("delta").load(delta_paths['payments_transformed'])
-
-    # ✅ Drop partition/audit columns before merge to avoid duplicates
     booking_df  = booking_df.drop("year", "month", "transformed_at")
     customer_df = customer_df.drop("transformed_at")
     cars_df     = cars_df.drop("transformed_at")
@@ -46,7 +44,7 @@ try:
 
     output_path = delta_paths['merged']
 
-    # ✅ IDEMPOTENCY — MERGE on booking_id
+    # IDEMPOTENCY  MERGE on booking_id
     if DeltaTable.isDeltaTable(spark, output_path):
         delta_table = DeltaTable.forPath(spark, output_path)
         delta_table.alias("target").merge(
@@ -55,15 +53,15 @@ try:
         ).whenMatchedUpdateAll() \
          .whenNotMatchedInsertAll() \
          .execute()
-        print("✅ Merged UPSERTED (idempotent)")
+        print(" Merged UPSERTED (idempotent)")
     else:
         merged_df.write.format("delta").mode("overwrite").save(output_path)
-        print("✅ Merged CREATED (first run)")
+        print("Merged CREATED (first run)")
 
     total = spark.read.format("delta").load(output_path).count()
-    print(f"✅ Merge complete | records: {total:,}")
+    print(f"Merge complete | records: {total:,}")
 
 except Exception as e:
-    logger.error(f"❌ Merge Data FAILED: {e}")
+    logger.error(f"Merge Data FAILED: {e}")
     spark.stop()
     sys.exit(1)

@@ -769,8 +769,8 @@ def render_overview(bk, sla, val, alerts, loy_f, pay_f, trip_f, seg_f, clr):
                 pill("● healthy" if p_ok else "● issues", C2 if p_ok else C3),
                 pill(f"dq: {dq_score:.1f}%", C2 if dq_score>=90 else (C5 if dq_score>=70 else C3)),
                 pill(f"health: {health_score}/100", health_color),
-                pill(f"🚨 {failures} failure{'s' if failures!=1 else ''}", C3) if failures > 0 else None,
-                pill(f"⚠️ {warnings} warning{'s' if warnings!=1 else ''}", C5) if warnings > 0 and failures == 0 else None,
+                pill(f"{failures} failure{'s' if failures!=1 else ''}", C3) if failures > 0 else None,
+                pill(f"{warnings} warning{'s' if warnings!=1 else ''}", C5) if warnings > 0 and failures == 0 else None,
             ]),
         ]),
 

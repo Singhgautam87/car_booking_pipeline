@@ -10,7 +10,7 @@ class ConfigLoader:
             possible_paths = [
                 "/opt/config/config.json",  # Docker container path
                 os.path.join(os.path.dirname(__file__), "../../config/config.json"),  # Local relative
-                os.path.join(os.getcwd(), "config/config.json"),  # Current working directory
+                os.path.join(os.getcwd(), "config/config.json"), 
             ]
             
             config_path = None

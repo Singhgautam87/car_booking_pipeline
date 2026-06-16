@@ -40,7 +40,7 @@ try:
         col("customer.loyalty.points").cast("integer").alias("loyalty_points"),
     ).dropDuplicates(["customer_id"])
 
-    # ✅ Email domain extract — user33186@example.com → example.com
+    # Email domain extract — user33186@example.com → example.com
     customer_clean = customer_clean.withColumn(
         "email_domain",
         when(col("email").contains("@"),
@@ -48,7 +48,7 @@ try:
         ).otherwise(lit("unknown"))
     )
 
-    # ✅ Loyalty tier standardize — Silver/SILVER/silver → silver
+    # Loyalty tier standardize — Silver/SILVER/silver → silver
     customer_clean = customer_clean.withColumn(
         "loyalty_tier",
         when(col("loyalty_tier").isin("platinum","gold","silver","bronze"),
@@ -56,7 +56,7 @@ try:
         ).otherwise(lit("bronze"))
     )
 
-    # ✅ Loyalty numeric rank — interview mein poochte hain
+    # Loyalty numeric rank — interview mein poochte hain
     # "Kaise sort kiya tiers ko?"
     customer_clean = customer_clean.withColumn(
         "loyalty_rank",
@@ -66,14 +66,14 @@ try:
         .otherwise(1)
     )
 
-    # ✅ High value customer flag — Gold + Platinum
+    # High value customer flag — Gold + Platinum
     # Business logic: Premium customers ko alag treat karo
     customer_clean = customer_clean.withColumn(
         "is_high_value_customer",
         when(col("loyalty_rank") >= 3, True).otherwise(False)
     )
 
-    # ✅ Points tier — Bronze(0-999) Silver(1000-4999) Gold(5000-9999) Platinum(10000+)
+    # Points tier — Bronze(0-999) Silver(1000-4999) Gold(5000-9999) Platinum(10000+)
     customer_clean = customer_clean.withColumn(
         "loyalty_points", coalesce(col("loyalty_points"), lit(0))
     ).withColumn(
@@ -86,21 +86,21 @@ try:
 
     output_path = delta_paths['customer_transformed']
 
-    # ✅ IDEMPOTENCY — MERGE
+    # IDEMPOTENCY — MERGE
     if DeltaTable.isDeltaTable(spark, output_path):
         DeltaTable.forPath(spark, output_path).alias("target").merge(
             customer_clean.alias("source"),
             "target.customer_id = source.customer_id"
         ).whenMatchedUpdateAll().whenNotMatchedInsertAll().execute()
-        print("✅ Customer MERGED (idempotent)")
+        print("Customer MERGED (idempotent)")
     else:
         customer_clean.write.format("delta").mode("overwrite").save(output_path)
-        print("✅ Customer CREATED (first run)")
+        print("Customer CREATED (first run)")
 
     total = spark.read.format("delta").load(output_path).count()
-    print(f"✅ Customer transformed | records: {total:,}")
+    print(f"Customer transformed | records: {total:,}")
 
 except Exception as e:
-    logger.error(f"❌ Transform Customer FAILED: {e}")
+    logger.error(f"Transform Customer FAILED: {e}")
     spark.stop()
     sys.exit(1)

@@ -27,13 +27,12 @@ try:
 
     merged_df = spark.read.format("delta").load(delta_paths['merged'])
 
-    # ✅ Sirf merged_at drop karo — baaki saare 36 columns staging mein jayenge
     final_df = merged_df.drop("merged_at")
 
     total = final_df.count()
-    print(f"📦 Delta Lake se {total:,} records read kiye")
+    print(f"Delta Lake se {total:,} records read kiye")
 
-    # ✅ IDEMPOTENCY — overwrite staging table (truncate + insert)
+    # IDEMPOTENCY — overwrite staging table (truncate + insert)
     final_df.write \
         .format("jdbc") \
         .option("url",      config.get_postgres_jdbc_url()) \
@@ -48,6 +47,6 @@ try:
     print(f" PostgreSQL staging refreshed | table: {tables['staging']} | records: {total:,}")
 
 except Exception as e:
-    logger.error(f"❌ Write Postgres FAILED: {e}")
+    logger.error(f"Write Postgres FAILED: {e}")
     spark.stop()
     sys.exit(1)

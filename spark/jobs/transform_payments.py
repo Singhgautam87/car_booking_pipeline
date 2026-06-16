@@ -40,8 +40,6 @@ try:
         spark_round(col("payment_amount").cast("double"), 2).alias("payment_amount"),
     )
 
-    # ✅ Payment method standardize — actual data mein:
-    # "Debit Card", "Credit Card", "UPI" hain
     payments_clean = payments_clean.withColumn(
         "payment_method",
         when(lower(col("payment_method")).isin("credit card","credit_card"), lit("credit_card"))
@@ -51,14 +49,13 @@ try:
         .otherwise(lower(col("payment_method")))
     )
 
-    # ✅ Payment type classify
+
     payments_clean = payments_clean.withColumn(
         "is_digital_payment",
         when(col("payment_method").isin("credit_card","debit_card","upi"), True)
         .otherwise(False)
     )
 
-    # ✅ Amount tier — actual data range 3941 to 13407
     payments_clean = payments_clean.withColumn(
         "amount_tier",
         when(col("payment_amount") >= 10000, lit("high"))
@@ -66,8 +63,6 @@ try:
         .otherwise(lit("low"))
     )
 
-    # ✅ Split payment detect — ek booking mein multiple payments hain
-    # B008296 → P23699 (3941) + P19133 (13356) = split payment
     booking_payment_count = raw_payments_df \
         .groupBy("booking_id") \
         .count() \
@@ -82,21 +77,21 @@ try:
 
     output_path = delta_paths['payments_transformed']
 
-    # ✅ IDEMPOTENCY — MERGE on payment_id
+
     if DeltaTable.isDeltaTable(spark, output_path):
         DeltaTable.forPath(spark, output_path).alias("target").merge(
             payments_clean.alias("source"),
             "target.payment_id = source.payment_id"
         ).whenMatchedUpdateAll().whenNotMatchedInsertAll().execute()
-        print("✅ Payments MERGED (idempotent)")
+        print("Payments MERGED (idempotent)")
     else:
         payments_clean.write.format("delta").mode("overwrite").save(output_path)
-        print("✅ Payments CREATED (first run)")
+        print("Payments CREATED (first run)")
 
     total = spark.read.format("delta").load(output_path).count()
-    print(f"✅ Payments transformed | records: {total:,}")
+    print(f"Payments transformed | records: {total:,}")
 
 except Exception as e:
-    logger.error(f"❌ Transform Payments FAILED: {e}")
+    logger.error(f"Transform Payments FAILED: {e}")
     spark.stop()
     sys.exit(1)

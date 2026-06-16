@@ -43,8 +43,6 @@ try:
         lower(trim(col("insurance_coverage"))).alias("insurance_coverage"),
     )
 
-    # ✅ Price tier — actual data mein 1200-3900 range hai
-    # economy < 1500, standard 1500-3000, premium > 3000
     cars_clean = cars_clean.withColumn(
         "price_tier",
         when(col("price_per_day") >= 3000, lit("premium"))
@@ -52,8 +50,7 @@ try:
         .otherwise(lit("economy"))
     )
 
-    # ✅ Insurance standardize — HDFC/ICICI/TATA AIG → provider clean
-    # Full/Partial → standardize
+
     cars_clean = cars_clean.withColumn(
         "insurance_coverage",
         when(lower(col("insurance_coverage")) == "full",    lit("full"))
@@ -64,8 +61,6 @@ try:
         when(col("insurance_coverage") == "full", True).otherwise(False)
     )
 
-    # ✅ Insurance provider category — Indian providers
-    # HDFC/ICICI = private bank, TATA AIG = general insurance
     cars_clean = cars_clean.withColumn(
         "insurer_type",
         when(col("insurance_provider").isin("HDFC", "ICICI"), lit("private_bank"))
@@ -73,8 +68,6 @@ try:
         .otherwise(lit("other"))
     )
 
-    # ✅ Car segment — actual models from data
-    # Thar = adventure, Creta/Nexon = SUV, i20/Baleno = hatchback, Venue = compact_suv
     cars_clean = cars_clean.withColumn(
         "car_segment",
         when(col("model") == "Thar",   lit("adventure"))
@@ -86,21 +79,20 @@ try:
 
     output_path = delta_paths['cars_transformed']
 
-    # ✅ IDEMPOTENCY — MERGE on booking_id + car_id
     if DeltaTable.isDeltaTable(spark, output_path):
         DeltaTable.forPath(spark, output_path).alias("target").merge(
             cars_clean.alias("source"),
             "target.booking_id = source.booking_id AND target.car_id = source.car_id"
         ).whenMatchedUpdateAll().whenNotMatchedInsertAll().execute()
-        print("✅ Cars MERGED (idempotent)")
+        print("Cars MERGED (idempotent)")
     else:
         cars_clean.write.format("delta").mode("overwrite").save(output_path)
-        print("✅ Cars CREATED (first run)")
+        print("Cars CREATED (first run)")
 
     total = spark.read.format("delta").load(output_path).count()
-    print(f"✅ Cars transformed | records: {total:,}")
+    print(f"Cars transformed | records: {total:,}")
 
 except Exception as e:
-    logger.error(f"❌ Transform Cars FAILED: {e}")
+    logger.error(f"Transform Cars FAILED: {e}")
     spark.stop()
     sys.exit(1)

@@ -1,18 +1,3 @@
-"""
-ML Models v3 — Car Booking Pipeline
-=====================================
-FIXES vs v2:
-  - FIX 1: LabelEncoder per-column (not reused) — correct encoding
-  - FIX 2: np.random.binomial removed — clean churn labels
-  - FIX 3: Models saved to MinIO — survive container restart
-  - FIX 4: Prophet cross-validation + proper MAPE
-  - FIX 5: MLflow model registry — versioning
-  - NEW:   MinIO model persistence via boto3
-
-Table: customer_booking_staging (36 columns)
-Writes: ml_demand_forecast, ml_fraud_scores, ml_churn_scores (PostgreSQL)
-"""
-
 import os, sys, warnings, logging, psycopg2
 import pandas as pd
 import numpy as np
@@ -43,7 +28,7 @@ def get_pg_conn():
     return psycopg2.connect(**PG_CONN_PARAMS)
 
 
-# ── FIX 3: MinIO model persistence ──────────────────────────────
+#FIX 3: MinIO model persistence 
 def save_model_to_minio(model, model_name: str):
     """Save model to MinIO — survives container restart"""
     import joblib, tempfile
@@ -77,10 +62,10 @@ def save_model_to_minio(model, model_name: str):
         # Also save as latest
         s3.upload_file(tmp_path, "models", f"ml_models/{model_name}_latest.pkl")
         os.unlink(tmp_path)
-        logger.info(f"✅ Model saved to MinIO: models/{key}")
+        logger.info(f"Model saved to MinIO: models/{key}")
         return key
     except Exception as e:
-        logger.warning(f"⚠️ MinIO save failed: {e} — falling back to /tmp")
+        logger.warning(f" MinIO save failed: {e} — falling back to /tmp")
         os.makedirs("/tmp/models", exist_ok=True)
         import joblib
         joblib.dump(model, f"/tmp/models/{model_name}.pkl")
@@ -99,9 +84,7 @@ def get_booking_data() -> pd.DataFrame:
         conn.close()
 
 
-# ══════════════════════════════════════════════════════════════════
-# MODEL 1 — DEMAND FORECASTING (Prophet + Cross-Validation)
-# ══════════════════════════════════════════════════════════════════
+# MODEL 1  DEMAND FORECASTING (Prophet + Cross-Validation)
 def run_demand_forecasting():
     logger.info("[Demand Forecasting] Starting...")
     try:
@@ -134,7 +117,7 @@ def run_demand_forecasting():
     forecast = model.predict(model.make_future_dataframe(periods=30))
     next30   = forecast.tail(30)
 
-    # ✅ FIX 4: Prophet cross-validation — proper MAPE
+    # FIX 4: Prophet cross-validation  proper MAPE
     mape_value = None
     if n_days >= 60:
         try:
@@ -182,14 +165,9 @@ def run_demand_forecasting():
 
     # FIX 3: Save to MinIO
     save_model_to_minio(model, "prophet_demand")
-    logger.info(f"✅ Demand Forecasting done | MAPE: {mape_value}%")
+    logger.info(f"Demand Forecasting done | MAPE: {mape_value}%")
     return {"forecast": next30[["ds","yhat","yhat_lower","yhat_upper"]].to_dict("records"),
             "mape": mape_value}
-
-
-# ══════════════════════════════════════════════════════════════════
-# MODEL 2 — FRAUD DETECTION (Isolation Forest)
-# ══════════════════════════════════════════════════════════════════
 def run_fraud_detection():
     logger.info("[Fraud Detection] Starting...")
     from sklearn.ensemble      import IsolationForest
@@ -205,7 +183,7 @@ def run_fraud_detection():
                 "trip_type","car_segment","amount_tier","price_tier",
                 "insurer_type","pickup_slot","points_tier"]
 
-    # ✅ FIX 1: Per-column LabelEncoder — not reused
+    # FIX 1: Per-column LabelEncoder — not reused
     encoders = {}
     for col in cat_cols:
         if col in feature_df.columns:
@@ -298,10 +276,6 @@ def run_fraud_detection():
     logger.info("✅ Fraud Detection done.")
     return anomalies[["booking_id","customer_id","fraud_risk_score","risk_label"]].to_dict("records")
 
-
-# ══════════════════════════════════════════════════════════════════
-# MODEL 3 — CHURN PREDICTION (XGBoost)
-# ══════════════════════════════════════════════════════════════════
 def run_churn_prediction():
     logger.info("[Churn Prediction] Starting...")
     try:
@@ -318,9 +292,6 @@ def run_churn_prediction():
     if df.empty:
         logger.warning("[Churn Prediction] No data."); return []
 
-    # ✅ PRODUCTION FIX: Recency-based churn label
-    # Real churn = customer ne 60+ days se booking nahi ki
-    # Yeh hai asli churn signal — sirf "poor customer" nahi
     now = pd.Timestamp.now()
 
     if "booking_date" in df.columns:
@@ -333,16 +304,10 @@ def run_churn_prediction():
         df["days_since_last_booking"] = (now - df["last_booking_date"]).dt.days.fillna(999)
     else:
         df["days_since_last_booking"] = 999
-
-    # ✅ FIX: Dynamic recency threshold
-    # Agar saara data purana hai (demo data) toh relative cutoff use karo
-    # Top 30% most recent customers = active, baaki = churned
     p70 = df["days_since_last_booking"].quantile(0.30)
     recency_threshold = max(60, int(p70))
     logger.info(f"[Churn] Dynamic recency threshold: {recency_threshold} days (p70={p70:.0f})")
     recency_churn = df["days_since_last_booking"] > recency_threshold
-
-    # Signal 2: Low loyalty + low payment — at-risk segment
     low_loyalty = df["loyalty_tier"].str.lower().isin(["bronze","new","silver"]) \
                   if "loyalty_tier" in df.columns else pd.Series([False]*len(df))
     avg_payment = df["payment_amount"].mean() if "payment_amount" in df.columns else 0
@@ -352,8 +317,6 @@ def run_churn_prediction():
     # Signal 3: Not high value
     not_vip = ~df["is_high_value_customer"].fillna(False).astype(bool) \
               if "is_high_value_customer" in df.columns else pd.Series([True]*len(df))
-
-    # Combined: recency OR (low_loyalty AND low_payment AND not_vip)
     df["churn_label"] = (recency_churn | (low_loyalty & low_payment & not_vip)).astype(int)
 
     churn_rate = df["churn_label"].mean()
@@ -362,8 +325,6 @@ def run_churn_prediction():
                 f"Behavior churned: {(low_loyalty & low_payment & not_vip).sum()}")
 
     feature_df = df.copy()
-
-    # ✅ FIX 1: Per-column LabelEncoder
     cat_cols = ["loyalty_tier","payment_method","insurance_coverage","model",
                 "trip_type","car_segment","amount_tier","price_tier",
                 "points_tier","pickup_slot"]
@@ -378,7 +339,7 @@ def run_churn_prediction():
         if col in feature_df.columns:
             feature_df[col] = feature_df[col].fillna(False).astype(int)
 
-    # Add recency feature to feature_df
+    #Add recency feature to feature_df
     feature_df["days_since_last_booking"] = df["days_since_last_booking"].fillna(999)
 
     feature_cols = [c for c in [
@@ -397,8 +358,6 @@ def run_churn_prediction():
     # Check class balance
     churn_rate = y.mean()
     logger.info(f"[Churn] Label distribution: {y.value_counts().to_dict()} | churn_rate: {churn_rate:.2%}")
-
-    # ✅ FIX: Safety check — ensure both classes present
     if y.nunique() < 2:
         logger.warning(f"[Churn] Only 1 class in labels ({y.unique()}) — adjusting label balance")
         # Force ~30% churn using behavior signals only
@@ -470,18 +429,12 @@ def run_churn_prediction():
               float(row["churn_probability"]), str(row["churn_risk"]),
               float(auc), "xgboost"))
     conn.commit(); cur.close(); conn.close()
-
-    # FIX 3: Save to MinIO
     save_model_to_minio(model, "churn_xgboost")
 
     high_risk = customer_churn[customer_churn["churn_risk"].isin(["HIGH","CRITICAL"])]
-    logger.info(f"✅ Churn done | AUC: {auc:.3f} | High-risk: {len(high_risk)}")
+    logger.info(f"Churn done | AUC: {auc:.3f} | High-risk: {len(high_risk)}")
     return customer_churn.to_dict("records")
 
-
-# ══════════════════════════════════════════════════════════════════
-# ENTRY POINT
-# ══════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
     print("\n" + "="*55)
     print("  ML MODELS v3 — Car Booking Pipeline")
@@ -498,9 +451,9 @@ if __name__ == "__main__":
                      ("Churn Prediction",   run_churn_prediction)]:
         try:
             results[name] = fn()
-            print(f"✅ {name} complete\n")
+            print(f"{name} complete\n")
         except Exception as e:
-            logger.error(f"❌ {name} failed: {e}")
+            logger.error(f"{name} failed: {e}")
             import traceback; traceback.print_exc()
 
     print("="*55)

@@ -81,14 +81,14 @@ try:
         from_json(col("value").cast("string"), schema).alias("data")
     ).select("data.*")
 
-    # ── Bronze Layer — Raw data with partitioning ──────────────────
+    # Bronze Layer — Raw data with partitioning 
     raw_df = parsed_df.select(
         col("booking_id"),
         col("booking_date"),
         col("customer"),
         col("booking_details"),
         current_timestamp().alias("ingested_at"),
-        # ✅ Partition columns
+        # Partition columns
         year(col("booking_date").cast("date")).alias("year"),
         month(col("booking_date").cast("date")).alias("month"),
         dayofmonth(col("booking_date").cast("date")).alias("day"),
@@ -115,8 +115,6 @@ try:
         col("payment.amount").alias("payment_amount"),
         current_timestamp().alias("ingested_at"),
     )
-
-    # ✅ Partitioned write — Bronze layer
     raw_query = raw_df.writeStream \
         .format("delta") \
         .option("path",               delta_paths['raw']) \
@@ -140,9 +138,9 @@ try:
     cars_query.awaitTermination(timeout=120)
     payments_query.awaitTermination(timeout=120)
 
-    print("✅ Bronze layer written with partitioning: year/month/day")
+    print("Bronze layer written with partitioning: year/month/day")
 
 except Exception as e:
-    logger.error(f"❌ Ingest Stream FAILED: {e}")
+    logger.error(f"Ingest Stream FAILED: {e}")
     spark.stop()
     sys.exit(1)

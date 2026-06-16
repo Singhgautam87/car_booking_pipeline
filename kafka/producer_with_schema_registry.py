@@ -1,23 +1,13 @@
-"""
-Car Booking Kafka Producer — Schema Registry Integrated
-Schema Registry validate karta hai ki har message correct format mein hai
-"""
-
 import json
 import time
 import random
 import requests
 from kafka import KafkaProducer
 from datetime import datetime, timedelta
-
-# ================================================================
-# SCHEMA REGISTRY CONFIG
-# ================================================================
 SCHEMA_REGISTRY_URL = "http://schema-registry:8081"
 KAFKA_BOOTSTRAP = "kafka:9092"
 TOPIC = "car-bookings"
 
-# Avro-style JSON Schema — yeh Schema Registry mein register hoga
 CAR_BOOKING_SCHEMA = {
     "type": "record",
     "name": "CarBooking",
@@ -45,11 +35,6 @@ CAR_BOOKING_SCHEMA = {
         {"name": "event_timestamp",   "type": "string"},
     ]
 }
-
-
-# ================================================================
-# SCHEMA REGISTRY — Register + Validate
-# ================================================================
 def register_schema():
     """Schema Registry mein schema register karo"""
     subject = f"{TOPIC}-value"
@@ -65,13 +50,13 @@ def register_schema():
         )
         if response.status_code in [200, 409]:  # 409 = already exists
             schema_id = response.json().get("id", "existing")
-            print(f"✅ Schema registered/verified — ID: {schema_id}")
+            print(f"Schema registered/verified — ID: {schema_id}")
             return True
         else:
-            print(f"⚠️  Schema Registry response: {response.status_code} — {response.text}")
+            print(f" Schema Registry response: {response.status_code} — {response.text}")
             return False
     except requests.exceptions.ConnectionError:
-        print("⚠️  Schema Registry not available — running without schema validation")
+        print(" Schema Registry not available — running without schema validation")
         return False
 
 
@@ -82,11 +67,6 @@ def validate_message(message: dict) -> bool:
         print(f"❌ Schema violation — Missing booking_id")
         return False
     return True
-
-
-# ================================================================
-# DATA GENERATION
-# ================================================================
 CARS = [
     {"car_id": "C001", "model": "Swift",     "category": "Hatchback",  "price": 1200},
     {"car_id": "C002", "model": "Innova",    "category": "SUV",        "price": 2500},
@@ -140,32 +120,23 @@ def generate_booking(booking_num: int) -> dict:
         "status":             random.choice(STATUSES),
         "event_timestamp":    datetime.now().isoformat(),
     }
-
-
-# ================================================================
-# PRODUCER
-# ================================================================
 def run_producer(total_messages: int = 1000):
     print("=" * 50)
-    print("🚀 Car Booking Kafka Producer — Schema Registry Integrated")
+    print("Car Booking Kafka Producer — Schema Registry Integrated")
     print("=" * 50)
 
-    # Step 1: Schema register karo
-    schema_ok = register_schema()
 
-    # Step 2: car_booking.json se data load karo
+    schema_ok = register_schema()
     json_path = "/tmp/car_booking.json"
     bookings = []
     try:
         with open(json_path, "r") as f:
             raw = json.load(f)
             bookings = raw if isinstance(raw, list) else [raw]
-        print(f"✅ Loaded {len(bookings)} records from {json_path}")
+        print(f"Loaded {len(bookings)} records from {json_path}")
     except Exception as e:
-        print(f"⚠️  Could not load {json_path}: {e} — using generated data")
+        print(f"Could not load {json_path}: {e} — using generated data")
         bookings = [generate_booking(i) for i in range(1, total_messages + 1)]
-
-    # Step 3: Kafka Producer initialize
     producer = KafkaProducer(
         bootstrap_servers=[KAFKA_BOOTSTRAP],
         value_serializer=lambda v: json.dumps(v).encode("utf-8"),
@@ -179,12 +150,11 @@ def run_producer(total_messages: int = 1000):
     failed = 0
     total  = len(bookings)
 
-    print(f"\n📤 Sending {total} messages to topic: {TOPIC}")
+    print(f"\nSending {total} messages to topic: {TOPIC}")
     print("-" * 50)
 
     for i, message in enumerate(bookings, 1):
         try:
-            # ✅ Missing fields ko default values se fill karo
             message.setdefault("event_timestamp",    datetime.now().isoformat())
             message.setdefault("customer_name",      "Unknown")
             message.setdefault("customer_id",        f"CUST{i:04d}")
@@ -213,17 +183,17 @@ def run_producer(total_messages: int = 1000):
             sent += 1
 
             if i % 100 == 0:
-                print(f"  ✅ Sent {sent}/{total} messages...")
+                print(f"Sent {sent}/{total} messages...")
 
         except Exception as e:
-            print(f"  ❌ Error sending message {i}: {e}")
+            print(f"  Error sending message {i}: {e}")
             failed += 1
 
     producer.flush()
     producer.close()
 
     print("\n" + "=" * 50)
-    print(f"✅ Producer complete!")
+    print(f"Producer complete!")
     print(f"   Sent:   {sent}")
     print(f"   Failed: {failed}")
     print(f"   Topic:  {TOPIC}")

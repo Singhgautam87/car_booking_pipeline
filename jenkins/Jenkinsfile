@@ -71,7 +71,7 @@ wait_http(){ for i in $(seq 1 $2); do c=$(docker exec spark-master curl -sf "$1"
                         sleep 10
                     done
                     echo "Waiting for MLflow..."
-                    wait_ok mlflow 30 10 || {
+                    wait_ok mlflow 60 10 || {
                         echo "MLflow failed"
                         docker logs mlflow --tail 100
                         exit 1

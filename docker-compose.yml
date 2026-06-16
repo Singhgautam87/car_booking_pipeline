@@ -275,36 +275,19 @@ services:
     networks:
       - car-booking-network
   mlflow:
-    image: ghcr.io/mlflow/mlflow:v2.14.3
-    container_name: mlflow
-    restart: unless-stopped
-    mem_limit: 512m
-    memswap_limit: 512m
-    dns:
-      - 8.8.8.8
-      - 1.1.1.1
-    ports:
-      - "5000:5000"
-
+    image: ghcr.io/mlflow/mlflow:latest
     command: >
       mlflow server
       --host 0.0.0.0
       --port 5000
       --backend-store-uri sqlite:///mlflow.db
-      --default-artifact-root /mlflow/artifacts
-
-    volumes:
-      - mlflow_data:/mlflow
 
     healthcheck:
-      test: ["CMD-SHELL","curl -f http://localhost:5000/health || curl -f http://localhost:5000"]
+      test: ["CMD-SHELL", "curl -f http://localhost:5000/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 10
       start_period: 60s
-
-    networks:
-      - car-booking-network
   fastapi:
     build:
       context: ./app

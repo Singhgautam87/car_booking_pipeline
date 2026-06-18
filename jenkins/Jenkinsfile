@@ -43,7 +43,22 @@ log_stat(){ db "INSERT INTO pipeline_run_stats (run_id,stage_name,records_proces
 log_alert(){ db "INSERT INTO pipeline_alerts (pipeline_name,stage_name,execution_date,error_message,alert_type) VALUES ('car_booking_pipeline','$1',NOW(),'$2','$3');"; }
 spark(){ $SPARK_SUBMIT $SPARK_MEMORY $2 --packages $SPARK_PACKAGES $DELTA_CONF $S3_CONF /opt/spark-apps/jobs/$1; }
 wait_ok(){ for i in $(seq 1 $2); do s=$(docker inspect --format="{{.State.Health.Status}}" "$1" 2>/dev/null||echo none); [ "$s" = healthy ] && return 0; sleep ${3:-5}; done; return 1; }
-wait_http(){ for i in $(seq 1 $2); do c=$(docker exec spark-master curl -sf "$1" -o /dev/null -w "%{http_code}" 2>/dev/null||echo 000); [ "$c" = 200 ] && return 0; sleep ${3:-5}; done; return 1; }
+wait_http(){ 
+for i in $(seq 1 $2); do
+c=$(docker exec spark-master curl -s \
+-o /dev/null \
+-w "%{http_code}" "$1" 2>/dev/null || echo "000")
+
+echo "HTTP=$c"
+
+if [ "$c" = "200" ] || [ "$c" = "403" ]; then
+return 0
+fi
+
+sleep ${3:-5}
+done
+return 1
+}
 '''
                 sh 'echo "Run ID:${PIPELINE_RUN_ID} Branch:${GIT_BRANCH} Build:#${BUILD_NUMBER}"; ls -la'
             }
@@ -238,7 +253,7 @@ wait_http(){ for i in $(seq 1 $2); do c=$(docker exec spark-master curl -sf "$1"
                     sh '''
                         . ./lib.sh
                         STAGE_START=$(date +%s)
-                        wait_http http://mlflow:5000/api/2.0/mlflow/experiments/list 12 5
+                        wait_http http://mlflow:5000/health 12 5
                         docker exec -u root spark-master pip install "packaging<25" mlflow-skinny sqlalchemy --quiet --break-system-packages 2>/dev/null || \
                         docker exec -u root spark-master pip install "packaging<25" mlflow-skinny sqlalchemy --quiet
                         docker exec -u root -e MLFLOW_TRACKING_URI=http://mlflow:5000 -e ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-} spark-master python3 -c "
